@@ -1,85 +1,58 @@
 # IoT_Project
 # 🛻 Radio-Controlled Car for Surveillance and Data Retrieval
 
-## 📌 Project Overview
+## 🔍 Project Overview
 
-This IoT project is centered around an RC (Radio-Controlled) Car equipped with sensors and smart features, designed for:
+This IoT project involves the development of a Radio-Controlled (RC) Car equipped with sensors and electronic modules, designed for two main applications:
 
-- **Surveillance**: Monitoring hard-to-reach or sensitive areas using real-time video.
-- **Data Retrieval**: Collecting environmental data such as temperature, humidity, or gas levels, or mapping terrain in exploration contexts.
+- **Surveillance**: Monitoring hard-to-reach or restricted areas using a live camera stream.
+- **Environmental Data Collection**: Measuring parameters such as temperature, humidity, or gas levels, useful for exploration or field analysis.
 
-The RC Car can be remotely operated over the Internet through a **dedicated WebApp**. The system includes a camera for live video feed, various onboard sensors, and the ability to process and respond to image data through server-side machine learning.
+The RC Car is remotely operated through a **WebApp** connected via **ESP32**, and features:
 
-The WebApp (hosted on a Python server) enables users to:
-- View the car’s perspective via a real-time video stream.
-- Control the car's movement (steering, speed, direction).
-- Manage sensors and peripherals (e.g., LEDs, distance sensors).
-- Save image frames for further analysis.
-- Run object recognition on saved images.
-- Receive automated alerts through a Telegram bot when specific objects are detected.
+- Remote control of vehicle motion (steering, speed, direction)
+- Real-time video streaming from an onboard camera
+- Frame capture and saving functionality
+- Image analysis via a server-side machine learning algorithm
+- Automatic Telegram notifications when specific objects are detected
+
+An **Arduino board** handles data acquisition from the sensors mounted on a breadboard, allowing for future expansion with additional modules.
 
 ---
 
 ## ✅ Functional Requirements
 
-| ID   | Title                         | Description                                                                                     | Input                                           | Output                                       |
-|------|-------------------------------|-------------------------------------------------------------------------------------------------|------------------------------------------------|----------------------------------------------|
-| FR1  | Remote Vehicle Control        | Remotely control the RC Car via the WebApp (steering, speed, direction).                       | User commands from WebApp                      | RC Car movement                              |
-| FR2  | Real-time Image Retrieval     | Display real-time video from the onboard camera in the WebApp.                                 | Camera video stream                            | Real-time video stream in WebApp             |
-| FR3  | Sensor Management             | Monitor environmental/operational data via onboard sensors.                                     | Sensor data                                    | Sensor readings on WebApp                    |
-| FR4  | Image Data Archiving          | Save specific image frames from the video stream.                                               | User command to capture frame                  | Image frame saved                            |
-| FR5  | Object Recognition            | Detect and classify objects using a machine learning model.                                     | Saved image frames                             | Recognized objects and labels                |
-| FR6  | Automated Notifications       | Notify Telegram bot subscribers when specific objects are detected.                             | Detected object labels                         | Telegram message with alert                  |
-| FR7  | Vehicle Geolocation Tracking  | Show the current location of the RC Car on the WebApp map.                                      | GPS coordinates                                | Location displayed on map interface          |
+| ID   | Title                        | Description                                                                      | Input                                        | Output                                 |
+|------|------------------------------|----------------------------------------------------------------------------------|---------------------------------------------|----------------------------------------|
+| FR1  | Remote Vehicle Control       | Allows remote control of the RC Car via the WebApp (steering, speed, direction) | User commands from WebApp                   | RC Car movement                         |
+| FR2  | Real-time Image Retrieval    | Streams real-time video from the onboard camera to the WebApp                   | Video stream from camera                    | Live video feed in WebApp               |
+| FR3  | Sensor Management            | Monitors environmental data from onboard sensors                                | Sensor data (e.g., temperature, gas, etc.)  | Sensor readings displayed in WebApp     |
+| FR4  | Image Data Saving            | Allows the operator to save specific video frames                               | User command to save frame                  | Image frame saved                       |
+| FR5  | Object Recognition           | Identifies objects in saved images using a machine learning algorithm           | Saved image frames                          | Recognized object labels                |
+| FR6  | Automated Notifications      | Sends Telegram alerts based on recognized objects                               | Detected object labels                      | Telegram message sent to subscribers    |
+| FR7  | GPS Module Integration       | Displays the current position of the RC Car on the WebApp                       | GPS coordinates from the onboard module     | Car position shown on a map interface   |
 
 ---
 
 ## 📋 Non-Functional Requirements
 
-| ID   | Title                | Description                                                                                   |
-|------|----------------------|-----------------------------------------------------------------------------------------------|
-| NFR1 | System Responsiveness | The WebApp must respond to user inputs within an acceptable delay.                           |
-| NFR2 | Battery Efficiency   | The RC Car should operate for at least 1 hour on a full charge under normal conditions.       |
-| NFR3 | Scalability          | The system should support adding new sensors and features without significant slowdowns.      |
-| NFR4 | Durability           | The RC Car must handle outdoor conditions, including small impacts and vibrations.            |
-| NFR5 | Ease of Use          | The WebApp interface must be intuitive for users without technical experience.                |
-| NFR6 | Cost-Effectiveness   | The solution must remain affordable to reach a broad range of potential users.                |
+| ID   | Title                 | Description                                                                        |
+|------|-----------------------|------------------------------------------------------------------------------------|
+| NFR1 | System Responsiveness | The WebApp must respond to user inputs with minimal latency                       |
+| NFR2 | Battery Efficiency    | The system should operate for at least 1 hour on a fully charged battery          |
+| NFR3 | Scalability           | The system must support the addition of new sensors without major performance loss|
+| NFR4 | Durability            | The RC Car must withstand outdoor use, including minor shocks and vibrations      |
+| NFR5 | Ease of Use           | The WebApp interface should be intuitive for non-technical users                  |
+| NFR6 | Affordability         | The system must be cost-effective and realizable with a limited budget            |
 
 ---
 
-## 🚀 Technologies Used
+## 🔧 Main Hardware Components
 
-- Python (Flask or FastAPI for WebApp backend)
-- HTML/CSS/JS (WebApp frontend)
-- OpenCV / TensorFlow / PyTorch (for object recognition)
-- Telegram Bot API (for alerts)
-- Raspberry Pi / ESP32 (microcontroller unit)
-- Sensors: Camera, GPS, Ultrasonic, etc.
-
----
-
-## 📦 Future Improvements
-
-- Add obstacle avoidance
-- Integrate SLAM for autonomous navigation
-- Expand sensor suite for richer data collection
-- Real-time cloud storage and analytics dashboard
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
----
-
-## 🤝 Contributions
-
-Pull requests are welcome! Feel free to open issues or suggest new features.
-
----
-
-## 📬 Contact
-
-For questions or collaborations: [YourEmail@example.com]
+- **ESP32** – Handles Wi-Fi connectivity and communication with the WebApp  
+- **Arduino** – Manages sensor data collection  
+- **Camera Module** – Provides live video feed  
+- **Sensor Modules** – For temperature, gas, ultrasonic distance, etc.  
+- **GPS Module** – For real-time location tracking  
+- **Telegram Bot** – For automated user notifications
 
