@@ -26,7 +26,7 @@ An **Arduino board** handles data acquisition from the sensors mounted on a brea
 |------|------------------------------|----------------------------------------------------------------------------------|---------------------------------------------|----------------------------------------|
 | FR1  | Remote Vehicle Control       | Allows remote control of the RC Car via the WebApp (steering, speed, direction) | User commands from WebApp                   | RC Car movement                         |
 | FR2  | Real-time Image Retrieval    | Streams real-time video from the onboard camera to the WebApp                   | Video stream from camera                    | Live video feed in WebApp               |
-| FR3  | Sensor Management            | Monitors environmental data from onboard sensors                                | Sensor data (e.g., temperature, gas, etc.)  | Sensor readings displayed in WebApp     |
+| FR3  | Sensor Management            | Monitors environmental data from onboard sensors                                | Sensor data (e.g., temperature, humidity, etc.)  | Sensor readings displayed in WebApp     |
 | FR4  | Image Data Saving            | Allows the operator to save specific video frames                               | User command to save frame                  | Image frame saved                       |
 | FR5  | Object Recognition           | Identifies objects in saved images using a machine learning algorithm           | Saved image frames                          | Recognized object labels                |
 | FR6  | Automated Notifications      | Sends Telegram alerts based on recognized objects                               | Detected object labels                      | Telegram message sent to subscribers    |
