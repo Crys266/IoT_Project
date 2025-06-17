@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-CAM RC Car</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <script>
+        document.addEventListener('keydown', function(event) {
+            let direction = '';
+            switch(event.key) {
+                case 'ArrowUp':
+                    direction = 'avanti';
+                    break;
+                case 'ArrowDown':
+                    direction = 'indietro';
+                    break;
+                case 'ArrowLeft':
+                    direction = 'sinistra';
+                    break;
+                case 'ArrowRight':
+                    direction = 'destra';
+                    break;
+            }
+            if (direction) {
+                fetch('/control', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                    },
+                    body: 'direction=' + direction
+                });
+            }
+        });
+
+        function sendCommand(direction) {
+            fetch('/control', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'direction=' + direction
+            });
+        }
+
+        function toggleNegative() {
+            fetch('/toggle_negative', { method: 'POST' });
+        }
+
+        function toggleObjectDetection() {
+            fetch('/toggle_object_detection', { method: 'POST' });
+        }
+    </script>
+</head>
+<body>
+    <h1>ESP32-CAM RC Car</h1>
+    <div id="video-container">
+        <img src="/video_feed" id="video-stream" alt="Video Stream">
+    </div>
+    <div id="controls">
+        <button onclick="sendCommand('avanti')">Avanti</button>
+        <button onclick="sendCommand('indietro')">Indietro</button>
+        <button onclick="sendCommand('sinistra')">Sinistra</button>
+        <button onclick="sendCommand('destra')">Destra</button>
+        <button onclick="toggleNegative()">Toggle Negative Effect</button>
+        <button onclick="toggleObjectDetection()">Toggle Object Detection</button>
+    </div>
+</body>
+</html>
