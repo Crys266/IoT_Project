@@ -57,28 +57,9 @@ for directory in [SAVED_IMAGES_DIR, THUMBNAILS_DIR]:
 
 # Global variables for FR4
 latest_frame = None
-images_database = []
 
 
-def load_images_database():
-    global images_database
-    if os.path.exists(METADATA_FILE):
-        try:
-            with open(METADATA_FILE, 'r') as f:
-                images_database = json.load(f)
-        except Exception as e:
-            print(f"❌ Error loading database: {e}")
-            images_database = []
-    else:
-        images_database = []
 
-
-def save_images_database():
-    try:
-        with open(METADATA_FILE, 'w') as f:
-            json.dump(images_database, f, indent=2)
-    except Exception as e:
-        print(f"❌ Error saving database: {e}")
 
 
 # NUOVO: Migrazione automatica da JSON se MongoDB è disponibile
@@ -123,12 +104,15 @@ def create_thumbnail(image_path, thumbnail_path, size=(150, 150)):
     return False
 
 
-# Carica database JSON se MongoDB non disponibile
-if db is None:
-    load_images_database()
-else:
-    # Esegui migrazione all'avvio se MongoDB è disponibile
-    migrate_existing_data()
+    # Setup complete - verify MongoDB connection
+    if db is None:
+        print("❌ MongoDB is required for this application to function!")
+        print("💡 Please ensure MongoDB is running and accessible")
+        print("🔗 Default connection: mongodb://localhost:27017/")
+        exit(1)
+    else:
+        # Auto-migrate existing JSON data if available
+        migrate_existing_data()
 
 
 def draw_detection_boxes_on_live_frame(live_img, boxes_data):
@@ -434,28 +418,15 @@ def save_image():
                         'objects_count': int(detection_objects_count)
                     }
 
-        # NUOVO: Salva su MongoDB o fallback a JSON
-        if db is not None:
-            try:
-                # Aggiungi ID legacy per compatibilità
-                image_record['id'] = len(images_database) + 1
-                image_id = db.save_image_metadata(image_record)
-                image_record['mongodb_id'] = image_id
-                print(f"✅ Image saved to MongoDB with ID: {image_id}")
-                database_used = "mongodb"
-            except Exception as e:
-                print(f"❌ MongoDB save failed, falling back to JSON: {e}")
-                # Fallback al sistema JSON se MongoDB fallisce
-                image_record['id'] = len(images_database) + 1
-                images_database.append(image_record)
-                save_images_database()
-                database_used = "json_fallback"
-        else:
-            # Sistema JSON originale
-            image_record['id'] = len(images_database) + 1
-            images_database.append(image_record)
-            save_images_database()
-            database_used = "json"
+        # Save to MongoDB (required)
+        try:
+            image_id = db.save_image_metadata(image_record)
+            image_record['mongodb_id'] = image_id
+            print(f"✅ Image saved to MongoDB with ID: {image_id}")
+            database_used = "mongodb"
+        except Exception as e:
+            print(f"❌ Failed to save image to MongoDB: {e}")
+            return jsonify(error=f"Database save failed: {str(e)}"), 500
 
         effects_info = []
         if negative_effect:
@@ -493,96 +464,42 @@ def list_saved_images():
     if request.args.get('date_to'):
         filters['date_to'] = request.args.get('date_to')
 
-    if db is not None:
-        try:
-            result = db.get_images_paginated(page=page, limit=limit, filters=filters)
-            result['database'] = 'mongodb'
-            return jsonify(result)
-        except Exception as e:
-            print(f"❌ MongoDB query failed, using JSON fallback: {e}")
-
-    # Fallback JSON (sistema originale)
-    sorted_images = sorted(images_database, key=lambda x: x['created'], reverse=True)
-
-    # Applica filtri per JSON
-    if filters.get('has_detection'):
-        sorted_images = [img for img in sorted_images if img.get('detection_results')]
-
-    # Paginazione
-    start_idx = (page - 1) * limit
-    end_idx = start_idx + limit
-    paginated_images = sorted_images[start_idx:end_idx]
-
-    total_images = len(sorted_images)
-    total_size = sum(img['size'] for img in sorted_images)
-
-    return jsonify({
-        'images': paginated_images,
-        'pagination': {
-            'current_page': page,
-            'per_page': limit,
-            'total_pages': (total_images + limit - 1) // limit,
-            'total_count': total_images
-        },
-        'statistics': {
-            'total_images': total_images,
-            'total_size': total_size,
-            'total_size_mb': round(total_size / (1024 * 1024), 2)
-        },
-        'database': 'json'
-    })
+    try:
+        result = db.get_images_paginated(page=page, limit=limit, filters=filters)
+        result['database'] = 'mongodb'
+        return jsonify(result)
+    except Exception as e:
+        print(f"❌ MongoDB query failed: {e}")
+        return jsonify(error=f"Database query failed: {str(e)}"), 500
 
 
 @app.route('/delete_image/<image_id>', methods=['DELETE'])
 def delete_image(image_id):
-    global images_database
-
-    if db is not None:
-        try:
-            # Prova prima MongoDB, poi fallback JSON
-            images_result = db.get_images_paginated(limit=1000)
-            image = None
-            for img in images_result['images']:
-                if img['id'] == image_id:
-                    image = img
-                    break
-
-            if image:
-                # Elimina file fisici
-                if os.path.exists(image['filepath']):
-                    os.remove(image['filepath'])
-                thumbnail_path = os.path.join(THUMBNAILS_DIR, image['thumbnail'])
-                if os.path.exists(thumbnail_path):
-                    os.remove(thumbnail_path)
-
-                # Elimina da MongoDB
-                if db.delete_image(image_id):
-                    print(f"🗑️ Deleted image from MongoDB: {image['filename']}")
-                    return jsonify(status="success", message=f"Image {image['filename']} deleted", database="mongodb")
-                else:
-                    return jsonify(error="Failed to delete from MongoDB"), 500
-        except Exception as e:
-            print(f"❌ MongoDB delete failed, trying JSON: {e}")
-
-    # Fallback JSON o se MongoDB non disponibile
-    image = next((img for img in images_database if str(img['id']) == str(image_id)), None)
-    if not image:
-        return jsonify(error="Image not found"), 404
-
     try:
-        # Elimina file fisici
+        # Get image details first
+        images_result = db.get_images_paginated(limit=1000)
+        image = None
+        for img in images_result['images']:
+            if img['id'] == image_id:
+                image = img
+                break
+
+        if not image:
+            return jsonify(error="Image not found"), 404
+
+        # Delete physical files
         if os.path.exists(image['filepath']):
             os.remove(image['filepath'])
         thumbnail_path = os.path.join(THUMBNAILS_DIR, image['thumbnail'])
         if os.path.exists(thumbnail_path):
             os.remove(thumbnail_path)
 
-        # Elimina da JSON
-        images_database = [img for img in images_database if str(img['id']) != str(image_id)]
-        save_images_database()
-
-        print(f"🗑️ Deleted image from JSON: {image['filename']}")
-        return jsonify(status="success", message=f"Image {image['filename']} deleted", database="json")
+        # Delete from MongoDB
+        if db.delete_image(image_id):
+            print(f"🗑️ Deleted image from MongoDB: {image['filename']}")
+            return jsonify(status="success", message=f"Image {image['filename']} deleted", database="mongodb")
+        else:
+            return jsonify(error="Failed to delete from MongoDB"), 500
     except Exception as e:
         print(f"❌ Error deleting image: {e}")
         return jsonify(error=f"Failed to delete image: {str(e)}"), 500
@@ -592,34 +509,20 @@ def delete_image(image_id):
 def update_image_metadata(image_id):
     data = request.json
 
-    if db is not None:
-        try:
-            updates = {}
-            if 'tags' in data:
-                updates['tags'] = data['tags']
-            if 'description' in data:
-                updates['description'] = data['description']
+    try:
+        updates = {}
+        if 'tags' in data:
+            updates['tags'] = data['tags']
+        if 'description' in data:
+            updates['description'] = data['description']
 
-            if db.update_image_metadata(image_id, updates):
-                return jsonify(status="success", database="mongodb")
-            else:
-                # Se fallisce MongoDB, prova JSON
-                print(f"❌ MongoDB update failed for {image_id}, trying JSON")
-        except Exception as e:
-            print(f"❌ MongoDB update error: {e}, trying JSON")
-
-    # Fallback JSON
-    image = next((img for img in images_database if str(img['id']) == str(image_id)), None)
-    if not image:
-        return jsonify(error="Image not found"), 404
-
-    if 'tags' in data:
-        image['tags'] = data['tags']
-    if 'description' in data:
-        image['description'] = data['description']
-    image['updated'] = datetime.now().isoformat()
-    save_images_database()
-    return jsonify(status="success", image=image, database="json")
+        if db.update_image_metadata(image_id, updates):
+            return jsonify(status="success", database="mongodb")
+        else:
+            return jsonify(error="Failed to update image metadata"), 500
+    except Exception as e:
+        print(f"❌ MongoDB update error: {e}")
+        return jsonify(error=f"Database update failed: {str(e)}"), 500
 
 
 @app.route('/saved_images/<filename>')
@@ -687,38 +590,32 @@ def database_stats():
 
 @app.route('/send_image_telegram/<image_id>', methods=['POST'])
 def send_image_telegram(image_id):
-    # Cerca prima in MongoDB, poi in JSON
-    image = None
+    try:
+        images_result = db.get_images_paginated(limit=1000)
+        image = None
+        for img in images_result['images']:
+            if str(img['id']) == str(image_id):
+                image = img
+                break
 
-    if db is not None:
-        try:
-            images_result = db.get_images_paginated(limit=1000)
-            for img in images_result['images']:
-                if str(img['id']) == str(image_id):
-                    image = img
-                    break
-        except Exception as e:
-            print(f"❌ MongoDB search failed: {e}")
+        if not image:
+            return jsonify(error="Image not found"), 404
 
-    if not image:
-        # Fallback JSON
-        image = next((img for img in images_database if str(img['id']) == str(image_id)), None)
-
-    if not image:
-        return jsonify(error="Image not found"), 404
-
-    path = image['filepath']
-    label_info = ""
-    if image.get('detection_results'):
-        detected = image['detection_results']
-        label_info = f"\nOggetti: {', '.join([b['label'] for b in detected['boxes']])}"
-    gps_str = image.get('gps', 'unknown')
-    threading.Thread(
-        target=notify_if_danger,
-        args=([], gps_str, path),
-        kwargs={'image_path': path, 'caption': f"Immagine dalla gallery.{label_info}"}
-    ).start()
-    return jsonify(status="sent")
+        path = image['filepath']
+        label_info = ""
+        if image.get('detection_results'):
+            detected = image['detection_results']
+            label_info = f"\nOggetti: {', '.join([b['label'] for b in detected['boxes']])}"
+        gps_str = image.get('gps', 'unknown')
+        threading.Thread(
+            target=notify_if_danger,
+            args=([], gps_str, path),
+            kwargs={'image_path': path, 'caption': f"Immagine dalla gallery.{label_info}"}
+        ).start()
+        return jsonify(status="sent")
+    except Exception as e:
+        print(f"❌ Error sending image to telegram: {e}")
+        return jsonify(error=f"Failed to send image: {str(e)}"), 500
 
 
 @app.route('/toggle_negative', methods=['POST'])
@@ -842,23 +739,16 @@ if __name__ == '__main__':
     print("🤖 Telegram Bot: Multi-user notifications enabled")
 
     # Database status
-    if db is not None:
-        print("✅ MongoDB connection active")
-        try:
-            stats = db.get_database_stats()
-            images_count = stats.get('images_collection', {}).get('count', 0)
-            print(f"📊 Images in MongoDB: {images_count}")
-        except:
-            print("📊 MongoDB stats not available")
-        print("🆕 New MongoDB endpoints:")
-        print("  - GET /images/near/<lat>/<lon>?radius=1.0 - Geospatial search")
-        print("  - GET /statistics/detection - Advanced detection stats")
-        print("  - GET /database/stats - Database monitoring")
-    else:
-        print("⚠️ Running in JSON mode (MongoDB not available)")
-        print(f"📊 Images in JSON database: {len(images_database)}")
-
-    print("🔄 Hybrid system: MongoDB primary, JSON fallback")
-    print("📦 Automatic migration from JSON to MongoDB on startup")
+    print("✅ MongoDB connection active - JSON fallback system removed")
+    try:
+        stats = db.get_database_stats()
+        images_count = stats.get('images_collection', {}).get('count', 0)
+        print(f"📊 Images in MongoDB: {images_count}")
+    except:
+        print("📊 MongoDB stats not available")
+    print("🆕 MongoDB endpoints:")
+    print("  - GET /images/near/<lat>/<lon>?radius=1.0 - Geospatial search")
+    print("  - GET /statistics/detection - Advanced detection stats")
+    print("  - GET /database/stats - Database monitoring")
 
     app.run(host='0.0.0.0', port=5000, debug=True)
