@@ -20,6 +20,7 @@ class SurveillanceDB:
             self.db = self.client.iot_surveillance
             self.images = self.db.surveillance_images
             self.sessions = self.db.esp32_sessions  # Per tracking sessioni ESP32
+            self.users = self.db.users  # For authentication
 
             self._setup_indexes()
             print("✅ Database indexes created")
@@ -430,6 +431,73 @@ class SurveillanceDB:
         except Exception as e:
             print(f"❌ Error getting database stats: {e}")
             return {}
+
+    # User Management Methods for Authentication
+    def create_user(self, username: str, password_hash: str) -> str:
+        """
+        Create a new user account
+        """
+        try:
+            user_doc = {
+                "username": username,
+                "password_hash": password_hash,
+                "created_at": datetime.now(timezone.utc),
+                "last_login": None,
+                "is_active": True
+            }
+            result = self.users.insert_one(user_doc)
+            print(f"✅ User created: {username}")
+            return str(result.inserted_id)
+        except Exception as e:
+            print(f"❌ Error creating user: {e}")
+            raise
+
+    def get_user_by_username(self, username: str) -> Optional[Dict]:
+        """
+        Get user by username for authentication
+        """
+        try:
+            user = self.users.find_one({"username": username})
+            if user:
+                user["_id"] = str(user["_id"])
+            return user
+        except Exception as e:
+            print(f"❌ Error getting user: {e}")
+            return None
+
+    def update_user_login(self, username: str) -> bool:
+        """
+        Update user's last login timestamp
+        """
+        try:
+            result = self.users.update_one(
+                {"username": username},
+                {"$set": {"last_login": datetime.now(timezone.utc)}}
+            )
+            return result.modified_count > 0
+        except Exception as e:
+            print(f"❌ Error updating user login: {e}")
+            return False
+
+    def user_exists(self, username: str) -> bool:
+        """
+        Check if user exists
+        """
+        try:
+            return self.users.count_documents({"username": username}) > 0
+        except Exception as e:
+            print(f"❌ Error checking user existence: {e}")
+            return False
+
+    def get_user_count(self) -> int:
+        """
+        Get total number of users
+        """
+        try:
+            return self.users.count_documents({})
+        except Exception as e:
+            print(f"❌ Error getting user count: {e}")
+            return 0
 
 
 # Factory function per facile inizializzazione

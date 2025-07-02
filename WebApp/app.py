@@ -1,4 +1,4 @@
-from flask import Flask, request, Response, render_template, jsonify, send_from_directory
+from flask import Flask, request, Response, render_template, jsonify, send_from_directory, session, redirect, url_for
 import cv2
 import numpy as np
 from queue import Queue
@@ -7,14 +7,20 @@ import time
 import threading
 import os
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from telegram_bot import notify_if_danger, register_chat_id, unregister_chat_id
 import tempfile
+import secrets
 
-# NUOVO: Import MongoDB database
+# Import MongoDB database and authentication
 from database import create_surveillance_db
+from auth import hash_password, verify_password, login_user, logout_user, require_auth, is_authenticated, get_current_user, create_default_admin_user
 
 app = Flask(__name__)
+
+# Configure session security
+app.secret_key = os.getenv('SECRET_KEY', secrets.token_hex(32))
+app.permanent_session_lifetime = timedelta(days=30)  # For "remember me"
 
 # Queue per frame
 frame_queue = Queue(maxsize=1)
@@ -36,14 +42,20 @@ MAX_DETECTION_AGE = 1.5  # AUMENTATO: 1.5 secondi invece di 0.5!
 # Configurazione colori
 red_classes_config = ['person']
 
-# NUOVO: Setup MongoDB invece di JSON
+# Setup MongoDB (required)
 try:
     db = create_surveillance_db()
     print("✅ MongoDB database initialized successfully!")
+    # Auto-migrate existing JSON data if available
+    migrate_existing_data()
+    # Create default admin user if no users exist
+    create_default_admin_user(db)
 except Exception as e:
     print(f"❌ Failed to initialize MongoDB: {e}")
-    print("💡 Falling back to JSON system...")
-    db = None
+    print("❌ MongoDB is required for this application to function!")
+    print("💡 Please ensure MongoDB is running and accessible")
+    print("🔗 Default connection: mongodb://localhost:27017/")
+    exit(1)
 
 # FR4: Image management setup
 SAVED_IMAGES_DIR = "saved_images"
@@ -104,15 +116,7 @@ def create_thumbnail(image_path, thumbnail_path, size=(150, 150)):
     return False
 
 
-    # Setup complete - verify MongoDB connection
-    if db is None:
-        print("❌ MongoDB is required for this application to function!")
-        print("💡 Please ensure MongoDB is running and accessible")
-        print("🔗 Default connection: mongodb://localhost:27017/")
-        exit(1)
-    else:
-        # Auto-migrate existing JSON data if available
-        migrate_existing_data()
+
 
 
 def draw_detection_boxes_on_live_frame(live_img, boxes_data):
@@ -241,9 +245,76 @@ detection_thread = threading.Thread(target=realtime_detection_worker, daemon=Tru
 detection_thread.start()
 
 
+# Authentication Routes
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
+        remember_me = request.form.get('remember') == 'on'
+        
+        if not username or not password:
+            return render_template('login.html', error="Username and password are required")
+        
+        try:
+            user = db.get_user_by_username(username)
+            if user and verify_password(password, user['password_hash']):
+                if login_user(username, db):
+                    if remember_me:
+                        session.permanent = True
+                    return redirect(url_for('index'))
+                else:
+                    return render_template('login.html', error="Login failed. Please try again.")
+            else:
+                return render_template('login.html', error="Invalid username or password")
+        except Exception as e:
+            print(f"❌ Login error: {e}")
+            return render_template('login.html', error="Login system error. Please try again.")
+    
+    # If already logged in, redirect to main page
+    if is_authenticated():
+        return redirect(url_for('index'))
+    
+    return render_template('login.html')
+
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+
+# Protected route decorator - redirect unauthenticated users to login
+@app.before_request
+def check_authentication():
+    # Define public routes that don't require authentication
+    public_routes = [
+        'login', 
+        'logout', 
+        'video_feed', 
+        'upload',  # ESP32 camera uploads
+        'favicon',
+        'serve_saved_image',  # For viewing images
+        'serve_thumbnail',   # For viewing thumbnails
+        'list_saved_images'  # For viewing saved images (read-only)
+    ]
+    
+    # Allow static file serving
+    if request.endpoint and (request.endpoint.startswith('static') or request.endpoint in public_routes):
+        return
+    
+    # Require authentication for all other routes
+    if not is_authenticated():
+        if request.is_json:
+            return jsonify(error="Authentication required"), 401
+        else:
+            return redirect(url_for('login'))
+
+
 @app.route('/')
 def index():
-    return render_template('index.html', gps=last_gps, env=last_env)
+    current_user = get_current_user()
+    return render_template('index.html', gps=last_gps, env=last_env, current_user=current_user)
 
 
 @app.route('/favicon.ico')

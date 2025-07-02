@@ -758,8 +758,17 @@
     </script>
 </head>
 <body>
-    <div style="text-align:center; margin-bottom: 20px;">
-        <h1>🚗 ESP32-CAM RC Car Dashboard</h1>
+    <!-- Header with user info and logout -->
+    <div style="background: #23262f; padding: 10px 20px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; box-shadow: 0 2px 12px #1118;">
+        <h1 style="margin: 0; color: #49a6ff;">🚗 ESP32-CAM RC Car Dashboard</h1>
+        <div style="display: flex; align-items: center; gap: 15px;">
+            <span style="color: #eee;">👤 {{ current_user }}</span>
+            <form method="POST" action="/logout" style="margin: 0;">
+                <button type="submit" style="background: #ff4757; color: white; border: none; padding: 8px 15px; border-radius: 6px; cursor: pointer; font-size: 14px;">
+                    🔓 Logout
+                </button>
+            </form>
+        </div>
     </div>
 
     <div class="dashboard-container">
