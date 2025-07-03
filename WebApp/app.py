@@ -1,4 +1,5 @@
-from flask import Flask, request, Response, render_template, jsonify, send_from_directory
+from flask import Flask, request, Response, render_template, jsonify, send_from_directory, session, redirect, url_for, \
+    flash
 import cv2
 import numpy as np
 from queue import Queue
@@ -6,19 +7,28 @@ from object_detection import detect_objects_with_boxes
 import time
 import threading
 import os
-import json
 from datetime import datetime
 from telegram_bot import notify_if_danger, register_chat_id, unregister_chat_id
 import tempfile
 
-# NUOVO: Import MongoDB database
+# Import MongoDB database
 from database import create_surveillance_db
+
+# Import authentication
+from auth import AuthManager, login_required, generate_secret_key
 
 app = Flask(__name__)
 
+# Configurazione sicura per sessioni
+app.secret_key = generate_secret_key()
+app.config['SESSION_COOKIE_SECURE'] = False  # True solo con HTTPS
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 ora
+
 # Queue per frame
 frame_queue = Queue(maxsize=1)
-detection_frame_queue = Queue(maxsize=1)  # SOLO 1 frame alla volta
+detection_frame_queue = Queue(maxsize=1)
 
 # Stato globale
 negative_effect = False
@@ -27,28 +37,30 @@ current_command = ""
 last_gps = {"lat": None, "lon": None}
 last_env = {"temperature": None, "humidity": None}
 
-# Detection system "ONLY LATEST" - DURATA AUMENTATA
+# Detection system
 latest_detection = None
 detection_lock = threading.Lock()
 detection_count = 0
-MAX_DETECTION_AGE = 1.5  # AUMENTATO: 1.5 secondi invece di 0.5!
+MAX_DETECTION_AGE = 1.5
 
 # Configurazione colori
 red_classes_config = ['person']
 
-# NUOVO: Setup MongoDB invece di JSON
+# Setup MongoDB 
 try:
     db = create_surveillance_db()
     print("✅ MongoDB database initialized successfully!")
 except Exception as e:
-    print(f"❌ Failed to initialize MongoDB: {e}")
-    print("💡 Falling back to JSON system...")
-    db = None
+    print(f"❌ FATAL: Failed to initialize MongoDB: {e}")
+    print("💥 App cannot start without MongoDB connection!")
+    exit(1)
+
+# AuthManager sarà inizializzato dopo la configurazione dell'app
+auth_manager = None
 
 # FR4: Image management setup
 SAVED_IMAGES_DIR = "saved_images"
 THUMBNAILS_DIR = os.path.join(SAVED_IMAGES_DIR, "thumbnails")
-METADATA_FILE = os.path.join(SAVED_IMAGES_DIR, "images_database.json")
 
 # Create directories
 for directory in [SAVED_IMAGES_DIR, THUMBNAILS_DIR]:
@@ -57,52 +69,12 @@ for directory in [SAVED_IMAGES_DIR, THUMBNAILS_DIR]:
 
 # Global variables for FR4
 latest_frame = None
-images_database = []
 
-
-def load_images_database():
-    global images_database
-    if os.path.exists(METADATA_FILE):
-        try:
-            with open(METADATA_FILE, 'r') as f:
-                images_database = json.load(f)
-        except Exception as e:
-            print(f"❌ Error loading database: {e}")
-            images_database = []
-    else:
-        images_database = []
-
-
-def save_images_database():
-    try:
-        with open(METADATA_FILE, 'w') as f:
-            json.dump(images_database, f, indent=2)
-    except Exception as e:
-        print(f"❌ Error saving database: {e}")
-
-
-# NUOVO: Migrazione automatica da JSON se MongoDB è disponibile
-def migrate_existing_data():
-    """Migra dati esistenti da JSON a MongoDB se necessario"""
-    if db is None:
-        return
-
-    json_file = METADATA_FILE
-    if os.path.exists(json_file):
-        print("🔄 Found existing JSON database, starting migration...")
-        result = db.migrate_from_json(json_file)
-
-        if result["status"] == "success":
-            print(f"✅ Migration completed: {result['migrated_count']}/{result['total_items']} items")
-            if result["errors"]:
-                print(f"⚠️ Migration errors: {len(result['errors'])}")
-
-            # Backup del file JSON
-            backup_file = json_file + f".backup_{int(time.time())}"
-            os.rename(json_file, backup_file)
-            print(f"📦 JSON file backed up to: {backup_file}")
-        else:
-            print(f"❌ Migration failed: {result['message']}")
+# Inizializza AuthManager dopo la configurazione dell'app
+def init_auth():
+    global auth_manager
+    auth_manager = AuthManager(db)
+    print("🔐 Authentication system ready!")
 
 
 def create_thumbnail(image_path, thumbnail_path, size=(150, 150)):
@@ -121,14 +93,6 @@ def create_thumbnail(image_path, thumbnail_path, size=(150, 150)):
     except Exception as e:
         print(f"❌ Error creating thumbnail: {e}")
     return False
-
-
-# Carica database JSON se MongoDB non disponibile
-if db is None:
-    load_images_database()
-else:
-    # Esegui migrazione all'avvio se MongoDB è disponibile
-    migrate_existing_data()
 
 
 def draw_detection_boxes_on_live_frame(live_img, boxes_data):
@@ -257,9 +221,119 @@ detection_thread = threading.Thread(target=realtime_detection_worker, daemon=Tru
 detection_thread.start()
 
 
+# ============== ROUTES AUTENTICAZIONE ==============
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    print(f"🔐 Login route called - Method: {request.method}")
+
+    if request.method == 'POST':
+        action = request.form.get('action')
+        print(f"🔐 Action received: {action}")
+
+        if action == 'login':
+            username = request.form.get('username')
+            password = request.form.get('password')
+            remember = request.form.get('remember')
+
+            print(f"🔐 Login attempt - Username: {username}")
+
+            try:
+                user = auth_manager.verify_password(username, password)
+                print(f"🔐 Password verification result: {user is not None}")
+
+                if user:
+                    session['username'] = username
+                    session['user_id'] = str(user['_id'])
+                    if remember:
+                        session.permanent = True
+
+                    print(f"🔐 Session created for user: {username}")
+                    print(f"🔐 Session data: {dict(session)}")
+
+                    flash('Login effettuato con successo!', 'success')
+
+                    # Prova redirect diretto invece di url_for
+                    print("🔐 Attempting redirect to /")
+                    return redirect('/')
+
+                else:
+                    print("🔐 Invalid credentials")
+                    flash('Username o password non validi!', 'error')
+            except Exception as e:
+                print(f"🔐 Login error: {e}")
+                flash(f'Errore durante il login: {str(e)}', 'error')
+
+        elif action == 'change':
+            current_username = request.form.get('current_username')
+            current_password = request.form.get('current_password')
+            new_username = request.form.get('new_username')
+            new_password = request.form.get('new_password')
+            confirm_password = request.form.get('confirm_password')
+
+            # Validazioni
+            if new_password and new_password != confirm_password:
+                flash('Le password non coincidono!', 'error')
+            elif not new_username and not new_password:
+                flash('Devi fornire almeno un nuovo username o una nuova password!', 'error')
+            else:
+                try:
+                    # Applica modifiche
+                    result = auth_manager.change_credentials(
+                        current_username,
+                        current_password,
+                        new_username or None,
+                        new_password or None
+                    )
+
+                    if result['success']:
+                        flash(result['message'], 'success')
+                        # Se l'utente era loggato e ha cambiato username, aggiorna sessione
+                        if session.get('username') == current_username and new_username:
+                            session['username'] = new_username
+                    else:
+                        flash(result['message'], 'error')
+                except Exception as e:
+                    flash(f'Errore durante la modifica: {str(e)}', 'error')
+
+    return render_template('login.html')
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    flash('Logout effettuato con successo!', 'info')
+    return redirect(url_for('login'))
+
+
+@app.route('/force-login')
+def force_login():
+    """Route di test per forzare il login"""
+    # Simula login
+    session['username'] = 'admin'
+    session['user_id'] = 'test123'
+    flash('Login forzato per test!', 'success')
+    print(f"🔧 Forced login - Session: {dict(session)}")
+    return redirect('/')
+
+@app.route('/test-redirect')
+def test_redirect():
+    """Test redirect semplice"""
+    print("🔧 Testing redirect...")
+    return redirect('/')
+
+
+# ============== ROUTES PRINCIPALI ==============
+
 @app.route('/')
+@login_required
 def index():
-    return render_template('index.html', gps=last_gps, env=last_env)
+    print(f"🏠 Index route called - Session: {dict(session)}")
+    print(f"🏠 Username in session: {session.get('username')}")
+    return render_template('index.html',
+                         gps=last_gps,
+                         env=last_env,
+                         username=session.get('username'))
 
 
 @app.route('/favicon.ico')
@@ -267,10 +341,431 @@ def favicon():
     return app.send_static_file('favicon.ico')
 
 
+# ============== ROUTES PUBBLICHE (NO AUTH) ==============
+
 @app.route('/video_feed')
 def video_feed():
+    """Video feed pubblico per monitoraggio"""
     return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    """Upload ESP32 - deve rimanere pubblico"""
+    global latest_frame, last_env
+    img_data = request.data
+    latest_frame = img_data
+    if frame_queue.full():
+        frame_queue.get()
+    frame_queue.put(img_data)
+    if object_detection:
+        while not detection_frame_queue.empty():
+            try:
+                detection_frame_queue.get_nowait()
+            except:
+                break
+        try:
+            detection_frame_queue.put_nowait(img_data)
+        except:
+            pass
+    gps_header = request.headers.get('X-GPS')
+    temp_combined = request.headers.get('X-TEMP')
+    if temp_combined:
+        try:
+            temp, hum = map(float, temp_combined.strip().split(","))
+            last_env["temperature"] = temp
+            last_env["humidity"] = hum
+        except:
+            pass
+    global last_gps
+    if gps_header:
+        try:
+            lat, lon = map(float, gps_header.strip().split(","))
+            last_gps = {"lat": lat, "lon": lon}
+        except:
+            pass
+    return "OK", 200
+
+
+@app.route('/list_saved_images', methods=['GET'])
+def list_saved_images():
+    """Lista immagini - pubblico per visualizzazione"""
+    page = request.args.get('page', 1, type=int)
+    limit = request.args.get('limit', 20, type=int)
+
+    # Filtri opzionali
+    filters = {}
+    if request.args.get('has_detection') == 'true':
+        filters['has_detection'] = True
+    if request.args.get('date_from'):
+        filters['date_from'] = request.args.get('date_from')
+    if request.args.get('date_to'):
+        filters['date_to'] = request.args.get('date_to')
+
+    try:
+        result = db.get_images_paginated(page=page, limit=limit, filters=filters)
+        result['database'] = 'mongodb'
+        return jsonify(result)
+    except Exception as e:
+        print(f"❌ MongoDB query failed: {e}")
+        return jsonify(error="Database connection failed"), 500
+
+
+@app.route('/saved_images/<filename>')
+def serve_saved_image(filename):
+    """Serve immagini - pubblico"""
+    return send_from_directory(SAVED_IMAGES_DIR, filename)
+
+
+@app.route('/thumbnails/<filename>')
+def serve_thumbnail(filename):
+    """Serve thumbnails - pubblico"""
+    return send_from_directory(THUMBNAILS_DIR, filename)
+
+
+@app.route('/gps', methods=['GET'])
+def gps():
+    """GPS pubblico per monitoring"""
+    return jsonify(last_gps)
+
+
+@app.route('/sensor_data', methods=['GET'])
+def sensor_data():
+    """Dati sensori pubblici per monitoring"""
+    return jsonify({
+        "temp": last_env.get("temperature"),
+        "humi": last_env.get("humidity")
+    })
+
+
+@app.route('/status_data', methods=['GET'])
+def status_data():
+    """Status pubblico per monitoring"""
+    return jsonify({
+        "gps": last_gps,
+        "env": last_env,
+        "database": "mongodb"
+    })
+
+
+# ============== ROUTES PROTETTE (CON AUTH) ==============
+
+@app.route('/save_image', methods=['POST'])
+@login_required
+def save_image():
+    global latest_frame, last_gps, last_env
+    if latest_frame is None:
+        return jsonify(error="No frame available to save"), 400
+
+    try:
+        print(f"💾 Saving image with effects: negative={negative_effect}, detection={object_detection}")
+        processed_frame = apply_current_effects_to_image(latest_frame)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        filename = f"captured_{timestamp}.jpg"
+        filepath = os.path.join(SAVED_IMAGES_DIR, filename)
+        thumbnail_path = os.path.join(THUMBNAILS_DIR, f"thumb_{filename}")
+
+        # Salva file fisico
+        with open(filepath, 'wb') as f:
+            f.write(processed_frame)
+        create_thumbnail(filepath, thumbnail_path)
+
+        # Prepara metadati
+        gps_str = "unknown"
+        if last_gps["lat"] is not None and last_gps["lon"] is not None:
+            gps_str = f"{last_gps['lat']:.6f},{last_gps['lon']:.6f}"
+
+        image_record = {
+            'filename': filename,
+            'filepath': filepath,
+            'thumbnail': f"thumb_{filename}",
+            'size': len(processed_frame),
+            'created': datetime.now().isoformat(),
+            'gps': gps_str,
+            'gps_lat': last_gps["lat"],
+            'gps_lon': last_gps["lon"],
+            'temperature': last_env.get("temperature"),
+            'humidity': last_env.get("humidity"),
+            'tags': [],
+            'description': '',
+            'analysis': None,
+            'detection_active': object_detection,
+            'negative_effect': negative_effect,
+            'effects_applied': {
+                'negative': negative_effect,
+                'object_detection': object_detection
+            },
+            'saved_by': session.get('username')  # Traccia chi ha salvato
+        }
+
+        # Aggiungi detection results se presenti
+        detection_objects_count = 0
+        if object_detection and latest_detection:
+            with detection_lock:
+                if latest_detection and time.time() - latest_detection['timestamp'] <= MAX_DETECTION_AGE:
+                    detection_objects_count = len(latest_detection['boxes'])
+
+                    def sanitize_box(box):
+                        return {
+                            'x': int(box['x']),
+                            'y': int(box['y']),
+                            'w': int(box['w']),
+                            'h': int(box['h']),
+                            'label': str(box['label']),
+                            'confidence': float(box['confidence'])
+                        }
+
+                    sanitized_boxes = [sanitize_box(b) for b in latest_detection['boxes']]
+                    image_record['detection_results'] = {
+                        'boxes': sanitized_boxes,
+                        'detection_time': float(latest_detection['timestamp']),
+                        'processing_time': float(latest_detection['processing_time']),
+                        'objects_count': int(detection_objects_count)
+                    }
+
+        # Salva su MongoDB
+        try:
+            image_id = db.save_image_metadata(image_record)
+            image_record['mongodb_id'] = image_id
+            print(f"✅ Image saved to MongoDB with ID: {image_id}")
+        except Exception as e:
+            print(f"❌ MongoDB save failed: {e}")
+            return jsonify(error=f"Database save failed: {str(e)}"), 500
+
+        effects_info = []
+        if negative_effect:
+            effects_info.append("negative")
+        if object_detection and detection_objects_count > 0:
+            effects_info.append(f"detection({detection_objects_count} objects)")
+        elif object_detection:
+            effects_info.append("detection(no objects)")
+
+        print(f"📸 Image saved: {filename} (GPS: {gps_str}) by {session.get('username')}")
+
+        return jsonify(
+            status="success",
+            image=image_record,
+            effects_applied=effects_info,
+            database="mongodb"
+        )
+
+    except Exception as e:
+        print(f"❌ Error saving image: {e}")
+        return jsonify(error=f"Failed to save image: {str(e)}"), 500
+
+
+@app.route('/delete_image/<image_id>', methods=['DELETE'])
+@login_required
+def delete_image(image_id):
+    try:
+        # Cerca immagine in MongoDB
+        images_result = db.get_images_paginated(limit=1000)
+        image = None
+        for img in images_result['images']:
+            if str(img['id']) == str(image_id):
+                image = img
+                break
+
+        if not image:
+            return jsonify(error="Image not found"), 404
+
+        # Elimina file fisici
+        if os.path.exists(image['filepath']):
+            os.remove(image['filepath'])
+        thumbnail_path = os.path.join(THUMBNAILS_DIR, image['thumbnail'])
+        if os.path.exists(thumbnail_path):
+            os.remove(thumbnail_path)
+
+        # Elimina da MongoDB
+        if db.delete_image(image_id):
+            print(f"🗑️ Deleted image: {image['filename']} by {session.get('username')}")
+            return jsonify(status="success", message=f"Image {image['filename']} deleted")
+        else:
+            return jsonify(error="Failed to delete from database"), 500
+
+    except Exception as e:
+        print(f"❌ Error deleting image: {e}")
+        return jsonify(error=f"Failed to delete image: {str(e)}"), 500
+
+
+@app.route('/update_image/<image_id>', methods=['POST'])
+@login_required
+def update_image_metadata(image_id):
+    data = request.json
+
+    try:
+        updates = {}
+        if 'tags' in data:
+            updates['tags'] = data['tags']
+        if 'description' in data:
+            updates['description'] = data['description']
+
+        updates['updated_by'] = session.get('username')
+        updates['updated'] = datetime.now().isoformat()
+
+        if db.update_image_metadata(image_id, updates):
+            return jsonify(status="success", database="mongodb")
+        else:
+            return jsonify(error="Failed to update image"), 500
+    except Exception as e:
+        print(f"❌ MongoDB update error: {e}")
+        return jsonify(error=f"Update failed: {str(e)}"), 500
+
+
+@app.route('/send_image_telegram/<image_id>', methods=['POST'])
+@login_required
+def send_image_telegram(image_id):
+    try:
+        # Cerca immagine in MongoDB
+        images_result = db.get_images_paginated(limit=1000)
+        image = None
+        for img in images_result['images']:
+            if str(img['id']) == str(image_id):
+                image = img
+                break
+
+        if not image:
+            return jsonify(error="Image not found"), 404
+
+        path = image['filepath']
+        label_info = ""
+        if image.get('detection_results'):
+            detected = image['detection_results']
+            label_info = f"\nOggetti: {', '.join([b['label'] for b in detected['boxes']])}"
+        gps_str = image.get('gps', 'unknown')
+
+        caption = f"Immagine dalla gallery (inviata da {session.get('username')}).{label_info}"
+
+        threading.Thread(
+            target=notify_if_danger,
+            args=([], gps_str, path),
+            kwargs={'image_path': path, 'caption': caption}
+        ).start()
+        return jsonify(status="sent")
+    except Exception as e:
+        return jsonify(error=str(e)), 500
+
+
+@app.route('/control', methods=['POST'])
+@login_required
+def control():
+    global current_command
+    direction = request.form.get('direction')
+    current_command = direction
+    print(f"🎮 COMANDO RICEVUTO: {direction} da {session.get('username')}")
+    return jsonify(status="command received", direction=direction)
+
+
+@app.route('/toggle_negative', methods=['POST'])
+@login_required
+def toggle_negative():
+    global negative_effect
+    negative_effect = not negative_effect
+    print(f"🎨 Negative: {'ON' if negative_effect else 'OFF'} da {session.get('username')}")
+    return jsonify(status="negative effect toggled", negative_effect=negative_effect)
+
+
+@app.route('/toggle_object_detection', methods=['POST'])
+@login_required
+def toggle_object_detection():
+    global object_detection, latest_detection
+    object_detection = not object_detection
+    if not object_detection:
+        with detection_lock:
+            latest_detection = None
+        while not detection_frame_queue.empty():
+            try:
+                detection_frame_queue.get_nowait()
+            except:
+                break
+        print(f"🔍 REALTIME detection: OFF da {session.get('username')}")
+    else:
+        print(f"🔍 REALTIME detection: ON - max age {MAX_DETECTION_AGE}s da {session.get('username')}")
+    return jsonify(status="object detection toggled", object_detection=object_detection)
+
+
+@app.route('/set_red_classes', methods=['POST'])
+@login_required
+def set_red_classes():
+    global red_classes_config
+    classes = request.form.get('classes', 'person').split(',')
+    classes = [c.strip() for c in classes if c.strip()]
+    red_classes_config = classes
+    print(f"🔴 Red classes updated: {classes} da {session.get('username')}")
+    return jsonify(status="red classes updated", red_classes=classes)
+
+
+@app.route('/set_max_age', methods=['POST'])
+@login_required
+def set_max_age():
+    global MAX_DETECTION_AGE
+    age = request.form.get('age', type=float)
+    if age and 0.1 <= age <= 3.0:
+        MAX_DETECTION_AGE = age
+        print(f"⏰ Max detection age: {age}s da {session.get('username')}")
+        return jsonify(status="max age updated", max_age=MAX_DETECTION_AGE)
+    return jsonify(error="Invalid age (0.1-3.0s)"), 400
+
+
+# ============== ROUTES MONGODB AVANZATE (PROTETTE) ==============
+
+@app.route('/images/near/<float:lat>/<float:lon>')
+@login_required
+def images_near_location(lat, lon):
+    """Trova immagini vicine a coordinate specifiche"""
+    radius_km = request.args.get('radius', 1.0, type=float)
+
+    try:
+        images = db.find_images_near_location(lat, lon, radius_km)
+        return jsonify({
+            "images": images,
+            "query": {"lat": lat, "lon": lon, "radius_km": radius_km},
+            "count": len(images),
+            "database": "mongodb"
+        })
+    except Exception as e:
+        return jsonify(error=f"Geospatial query failed: {str(e)}"), 500
+
+
+@app.route('/statistics/detection')
+@login_required
+def detection_statistics():
+    """Statistiche avanzate su object detection"""
+    date_from = request.args.get('date_from')
+    date_to = request.args.get('date_to')
+    date_range = (date_from, date_to) if date_from and date_to else None
+
+    try:
+        stats = db.get_detection_statistics(date_range)
+        stats['database'] = 'mongodb'
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify(error=f"Statistics query failed: {str(e)}"), 500
+
+
+@app.route('/database/stats')
+@login_required
+def database_stats():
+    """Statistiche del database per monitoring"""
+    try:
+        stats = db.get_database_stats()
+        stats['database'] = 'mongodb'
+        return jsonify(stats)
+    except Exception as e:
+        return jsonify(error=f"Database stats failed: {str(e)}"), 500
+
+
+# ============== ROUTES RESTANTI ==============
+
+@app.route('/get_command', methods=['GET'])
+def get_command():
+    """ESP32 polling - deve rimanere pubblico"""
+    global current_command
+    print(f"📤 ESP32 CHIEDE: {current_command}")
+    return current_command
+
+
+# ============== FRAME GENERATION ==============
 
 def gen_frames():
     frame_count = 0
@@ -326,491 +821,11 @@ def gen_frames():
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 
-@app.route('/upload', methods=['POST'])
-def upload():
-    global latest_frame, last_env
-    img_data = request.data
-    latest_frame = img_data
-    if frame_queue.full():
-        frame_queue.get()
-    frame_queue.put(img_data)
-    if object_detection:
-        while not detection_frame_queue.empty():
-            try:
-                detection_frame_queue.get_nowait()
-            except:
-                break
-        try:
-            detection_frame_queue.put_nowait(img_data)
-        except:
-            pass
-    gps_header = request.headers.get('X-GPS')
-    temp_combined = request.headers.get('X-TEMP')
-    if temp_combined:
-        try:
-            temp, hum = map(float, temp_combined.strip().split(","))
-            last_env["temperature"] = temp
-            last_env["humidity"] = hum
-        except:
-            pass
-    global last_gps
-    if gps_header:
-        try:
-            lat, lon = map(float, gps_header.strip().split(","))
-            last_gps = {"lat": lat, "lon": lon}
-        except:
-            pass
-    return "OK", 200
+# ============== TELEGRAM WEBHOOK ==============
 
-
-@app.route('/save_image', methods=['POST'])
-def save_image():
-    global latest_frame, last_gps, last_env
-    if latest_frame is None:
-        return jsonify(error="No frame available to save"), 400
-
-    try:
-        print(f"💾 Saving image with effects: negative={negative_effect}, detection={object_detection}")
-        processed_frame = apply_current_effects_to_image(latest_frame)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        filename = f"captured_{timestamp}.jpg"
-        filepath = os.path.join(SAVED_IMAGES_DIR, filename)
-        thumbnail_path = os.path.join(THUMBNAILS_DIR, f"thumb_{filename}")
-
-        # Salva file fisico
-        with open(filepath, 'wb') as f:
-            f.write(processed_frame)
-        create_thumbnail(filepath, thumbnail_path)
-
-        # Prepara metadati
-        gps_str = "unknown"
-        if last_gps["lat"] is not None and last_gps["lon"] is not None:
-            gps_str = f"{last_gps['lat']:.6f},{last_gps['lon']:.6f}"
-
-        image_record = {
-            'filename': filename,
-            'filepath': filepath,
-            'thumbnail': f"thumb_{filename}",
-            'size': len(processed_frame),
-            'created': datetime.now().isoformat(),
-            'gps': gps_str,
-            'gps_lat': last_gps["lat"],
-            'gps_lon': last_gps["lon"],
-            'temperature': last_env.get("temperature"),
-            'humidity': last_env.get("humidity"),
-            'tags': [],
-            'description': '',
-            'analysis': None,
-            'detection_active': object_detection,
-            'negative_effect': negative_effect,
-            'effects_applied': {
-                'negative': negative_effect,
-                'object_detection': object_detection
-            }
-        }
-
-        # Aggiungi detection results se presenti
-        detection_objects_count = 0
-        if object_detection and latest_detection:
-            with detection_lock:
-                if latest_detection and time.time() - latest_detection['timestamp'] <= MAX_DETECTION_AGE:
-                    detection_objects_count = len(latest_detection['boxes'])
-
-                    def sanitize_box(box):
-                        return {
-                            'x': int(box['x']),
-                            'y': int(box['y']),
-                            'w': int(box['w']),
-                            'h': int(box['h']),
-                            'label': str(box['label']),
-                            'confidence': float(box['confidence'])
-                        }
-
-                    sanitized_boxes = [sanitize_box(b) for b in latest_detection['boxes']]
-                    image_record['detection_results'] = {
-                        'boxes': sanitized_boxes,
-                        'detection_time': float(latest_detection['timestamp']),
-                        'processing_time': float(latest_detection['processing_time']),
-                        'objects_count': int(detection_objects_count)
-                    }
-
-        # NUOVO: Salva su MongoDB o fallback a JSON
-        if db is not None:
-            try:
-                # Aggiungi ID legacy per compatibilità
-                image_record['id'] = len(images_database) + 1
-                image_id = db.save_image_metadata(image_record)
-                image_record['mongodb_id'] = image_id
-                print(f"✅ Image saved to MongoDB with ID: {image_id}")
-                database_used = "mongodb"
-            except Exception as e:
-                print(f"❌ MongoDB save failed, falling back to JSON: {e}")
-                # Fallback al sistema JSON se MongoDB fallisce
-                image_record['id'] = len(images_database) + 1
-                images_database.append(image_record)
-                save_images_database()
-                database_used = "json_fallback"
-        else:
-            # Sistema JSON originale
-            image_record['id'] = len(images_database) + 1
-            images_database.append(image_record)
-            save_images_database()
-            database_used = "json"
-
-        effects_info = []
-        if negative_effect:
-            effects_info.append("negative")
-        if object_detection and detection_objects_count > 0:
-            effects_info.append(f"detection({detection_objects_count} objects)")
-        elif object_detection:
-            effects_info.append("detection(no objects)")
-
-        print(f"📸 Image saved: {filename} (GPS: {gps_str}) [DB: {database_used}]")
-
-        return jsonify(
-            status="success",
-            image=image_record,
-            effects_applied=effects_info,
-            database=database_used
-        )
-
-    except Exception as e:
-        print(f"❌ Error saving image: {e}")
-        return jsonify(error=f"Failed to save image: {str(e)}"), 500
-
-
-@app.route('/list_saved_images', methods=['GET'])
-def list_saved_images():
-    page = request.args.get('page', 1, type=int)
-    limit = request.args.get('limit', 20, type=int)
-
-    # Filtri opzionali
-    filters = {}
-    if request.args.get('has_detection') == 'true':
-        filters['has_detection'] = True
-    if request.args.get('date_from'):
-        filters['date_from'] = request.args.get('date_from')
-    if request.args.get('date_to'):
-        filters['date_to'] = request.args.get('date_to')
-
-    if db is not None:
-        try:
-            result = db.get_images_paginated(page=page, limit=limit, filters=filters)
-            result['database'] = 'mongodb'
-            return jsonify(result)
-        except Exception as e:
-            print(f"❌ MongoDB query failed, using JSON fallback: {e}")
-
-    # Fallback JSON (sistema originale)
-    sorted_images = sorted(images_database, key=lambda x: x['created'], reverse=True)
-
-    # Applica filtri per JSON
-    if filters.get('has_detection'):
-        sorted_images = [img for img in sorted_images if img.get('detection_results')]
-
-    # Paginazione
-    start_idx = (page - 1) * limit
-    end_idx = start_idx + limit
-    paginated_images = sorted_images[start_idx:end_idx]
-
-    total_images = len(sorted_images)
-    total_size = sum(img['size'] for img in sorted_images)
-
-    return jsonify({
-        'images': paginated_images,
-        'pagination': {
-            'current_page': page,
-            'per_page': limit,
-            'total_pages': (total_images + limit - 1) // limit,
-            'total_count': total_images
-        },
-        'statistics': {
-            'total_images': total_images,
-            'total_size': total_size,
-            'total_size_mb': round(total_size / (1024 * 1024), 2)
-        },
-        'database': 'json'
-    })
-
-
-@app.route('/delete_image/<image_id>', methods=['DELETE'])
-def delete_image(image_id):
-    global images_database
-
-    if db is not None:
-        try:
-            # Prova prima MongoDB, poi fallback JSON
-            images_result = db.get_images_paginated(limit=1000)
-            image = None
-            for img in images_result['images']:
-                if img['id'] == image_id:
-                    image = img
-                    break
-
-            if image:
-                # Elimina file fisici
-                if os.path.exists(image['filepath']):
-                    os.remove(image['filepath'])
-                thumbnail_path = os.path.join(THUMBNAILS_DIR, image['thumbnail'])
-                if os.path.exists(thumbnail_path):
-                    os.remove(thumbnail_path)
-
-                # Elimina da MongoDB
-                if db.delete_image(image_id):
-                    print(f"🗑️ Deleted image from MongoDB: {image['filename']}")
-                    return jsonify(status="success", message=f"Image {image['filename']} deleted", database="mongodb")
-                else:
-                    return jsonify(error="Failed to delete from MongoDB"), 500
-        except Exception as e:
-            print(f"❌ MongoDB delete failed, trying JSON: {e}")
-
-    # Fallback JSON o se MongoDB non disponibile
-    image = next((img for img in images_database if str(img['id']) == str(image_id)), None)
-    if not image:
-        return jsonify(error="Image not found"), 404
-
-    try:
-        # Elimina file fisici
-        if os.path.exists(image['filepath']):
-            os.remove(image['filepath'])
-        thumbnail_path = os.path.join(THUMBNAILS_DIR, image['thumbnail'])
-        if os.path.exists(thumbnail_path):
-            os.remove(thumbnail_path)
-
-        # Elimina da JSON
-        images_database = [img for img in images_database if str(img['id']) != str(image_id)]
-        save_images_database()
-
-        print(f"🗑️ Deleted image from JSON: {image['filename']}")
-        return jsonify(status="success", message=f"Image {image['filename']} deleted", database="json")
-    except Exception as e:
-        print(f"❌ Error deleting image: {e}")
-        return jsonify(error=f"Failed to delete image: {str(e)}"), 500
-
-
-@app.route('/update_image/<image_id>', methods=['POST'])
-def update_image_metadata(image_id):
-    data = request.json
-
-    if db is not None:
-        try:
-            updates = {}
-            if 'tags' in data:
-                updates['tags'] = data['tags']
-            if 'description' in data:
-                updates['description'] = data['description']
-
-            if db.update_image_metadata(image_id, updates):
-                return jsonify(status="success", database="mongodb")
-            else:
-                # Se fallisce MongoDB, prova JSON
-                print(f"❌ MongoDB update failed for {image_id}, trying JSON")
-        except Exception as e:
-            print(f"❌ MongoDB update error: {e}, trying JSON")
-
-    # Fallback JSON
-    image = next((img for img in images_database if str(img['id']) == str(image_id)), None)
-    if not image:
-        return jsonify(error="Image not found"), 404
-
-    if 'tags' in data:
-        image['tags'] = data['tags']
-    if 'description' in data:
-        image['description'] = data['description']
-    image['updated'] = datetime.now().isoformat()
-    save_images_database()
-    return jsonify(status="success", image=image, database="json")
-
-
-@app.route('/saved_images/<filename>')
-def serve_saved_image(filename):
-    return send_from_directory(SAVED_IMAGES_DIR, filename)
-
-
-@app.route('/thumbnails/<filename>')
-def serve_thumbnail(filename):
-    return send_from_directory(THUMBNAILS_DIR, filename)
-
-
-# NUOVO: Endpoint per funzionalità avanzate MongoDB
-@app.route('/images/near/<float:lat>/<float:lon>')
-def images_near_location(lat, lon):
-    """Trova immagini vicine a coordinate specifiche"""
-    if db is None:
-        return jsonify(error="MongoDB not available for geospatial queries"), 503
-
-    radius_km = request.args.get('radius', 1.0, type=float)
-
-    try:
-        images = db.find_images_near_location(lat, lon, radius_km)
-        return jsonify({
-            "images": images,
-            "query": {"lat": lat, "lon": lon, "radius_km": radius_km},
-            "count": len(images),
-            "database": "mongodb"
-        })
-    except Exception as e:
-        return jsonify(error=f"Geospatial query failed: {str(e)}"), 500
-
-
-@app.route('/statistics/detection')
-def detection_statistics():
-    """Statistiche avanzate su object detection"""
-    if db is None:
-        return jsonify(error="MongoDB not available for advanced statistics"), 503
-
-    date_from = request.args.get('date_from')
-    date_to = request.args.get('date_to')
-    date_range = (date_from, date_to) if date_from and date_to else None
-
-    try:
-        stats = db.get_detection_statistics(date_range)
-        stats['database'] = 'mongodb'
-        return jsonify(stats)
-    except Exception as e:
-        return jsonify(error=f"Statistics query failed: {str(e)}"), 500
-
-
-@app.route('/database/stats')
-def database_stats():
-    """Statistiche del database per monitoring"""
-    if db is None:
-        return jsonify(error="MongoDB not available"), 503
-
-    try:
-        stats = db.get_database_stats()
-        stats['database'] = 'mongodb'
-        return jsonify(stats)
-    except Exception as e:
-        return jsonify(error=f"Database stats failed: {str(e)}"), 500
-
-
-@app.route('/send_image_telegram/<image_id>', methods=['POST'])
-def send_image_telegram(image_id):
-    # Cerca prima in MongoDB, poi in JSON
-    image = None
-
-    if db is not None:
-        try:
-            images_result = db.get_images_paginated(limit=1000)
-            for img in images_result['images']:
-                if str(img['id']) == str(image_id):
-                    image = img
-                    break
-        except Exception as e:
-            print(f"❌ MongoDB search failed: {e}")
-
-    if not image:
-        # Fallback JSON
-        image = next((img for img in images_database if str(img['id']) == str(image_id)), None)
-
-    if not image:
-        return jsonify(error="Image not found"), 404
-
-    path = image['filepath']
-    label_info = ""
-    if image.get('detection_results'):
-        detected = image['detection_results']
-        label_info = f"\nOggetti: {', '.join([b['label'] for b in detected['boxes']])}"
-    gps_str = image.get('gps', 'unknown')
-    threading.Thread(
-        target=notify_if_danger,
-        args=([], gps_str, path),
-        kwargs={'image_path': path, 'caption': f"Immagine dalla gallery.{label_info}"}
-    ).start()
-    return jsonify(status="sent")
-
-
-@app.route('/toggle_negative', methods=['POST'])
-def toggle_negative():
-    global negative_effect
-    negative_effect = not negative_effect
-    print(f"🎨 Negative: {'ON' if negative_effect else 'OFF'}")
-    return jsonify(status="negative effect toggled", negative_effect=negative_effect)
-
-
-@app.route('/toggle_object_detection', methods=['POST'])
-def toggle_object_detection():
-    global object_detection, latest_detection
-    object_detection = not object_detection
-    if not object_detection:
-        with detection_lock:
-            latest_detection = None
-        while not detection_frame_queue.empty():
-            try:
-                detection_frame_queue.get_nowait()
-            except:
-                break
-        print("🔍 REALTIME detection: OFF")
-    else:
-        print(f"🔍 REALTIME detection: ON - max age {MAX_DETECTION_AGE}s")
-    return jsonify(status="object detection toggled", object_detection=object_detection)
-
-
-@app.route('/set_red_classes', methods=['POST'])
-def set_red_classes():
-    global red_classes_config
-    classes = request.form.get('classes', 'person').split(',')
-    classes = [c.strip() for c in classes if c.strip()]
-    red_classes_config = classes
-    print(f"🔴 Red classes updated: {classes}")
-    return jsonify(status="red classes updated", red_classes=classes)
-
-
-@app.route('/set_max_age', methods=['POST'])
-def set_max_age():
-    global MAX_DETECTION_AGE
-    age = request.form.get('age', type=float)
-    if age and 0.1 <= age <= 3.0:
-        MAX_DETECTION_AGE = age
-        print(f"⏰ Max detection age: {age}s")
-        return jsonify(status="max age updated", max_age=MAX_DETECTION_AGE)
-    return jsonify(error="Invalid age (0.1-3.0s)"), 400
-
-
-@app.route('/control', methods=['POST'])
-def control():
-    global current_command
-    direction = request.form.get('direction')
-    current_command = direction
-    print(f"🎮 COMANDO RICEVUTO: {direction}")
-    return jsonify(status="command received", direction=direction)
-
-
-@app.route('/get_command', methods=['GET'])
-def get_command():
-    global current_command
-    print(f"📤 ESP32 CHIEDE: {current_command}")
-    return current_command
-
-
-@app.route('/status_data', methods=['GET'])
-def status_data():
-    # For AJAX polling (GPS + ENV)
-    return jsonify({
-        "gps": last_gps,
-        "env": last_env,
-        "database": "mongodb" if db is not None else "json"
-    })
-
-
-@app.route('/gps', methods=['GET'])
-def gps():
-    # For compatibility: returns only GPS
-    return jsonify(last_gps)
-
-
-@app.route('/sensor_data', methods=['GET'])
-def sensor_data():
-    return jsonify({
-        "temp": last_env.get("temperature"),
-        "humi": last_env.get("humidity")
-    })
-
-
-# --- TELEGRAM BOT WEBHOOK (multi-user subscribe/unsubscribe) ---
 @app.route('/telegram_webhook', methods=['POST'])
 def telegram_webhook():
+    """Telegram webhook - pubblico"""
     data = request.json
     if not data: return "no data"
     message = data.get("message") or data.get("edited_message")
@@ -830,35 +845,41 @@ def telegram_webhook():
     return "ok"
 
 
+# ============== STARTUP ==============
+
 if __name__ == '__main__':
-    print("🚀 Flask ESP32-CAM with MongoDB + REALTIME Detection + FR4 Image Saving")
+    # Inizializza l'authentication manager dopo che l'app è configurata
+    init_auth()
+
+    print("🚀 Flask ESP32-CAM with MongoDB ONLY + Authentication System")
+    print("🔐 Login required for RC car controls")
     print("📹 Video: Live stream with ZERO accumulation")
     print("🔍 Detection: ONLY LATEST - no old results!")
-    print(f"⚡ INCREASED Max detection age: {MAX_DETECTION_AGE}s")
+    print(f"⚡ Max detection age: {MAX_DETECTION_AGE}s")
     print("🔴 RED: person | 🟢 GREEN: all other objects")
     print("📍 Labels: ABOVE boxes, horizontally centered")
     print("⚡ REALTIME MODE: Scarta tutto il vecchio!")
     print("📸 FR4: Image saving with effects applied (negative + detection)!")
     print("🤖 Telegram Bot: Multi-user notifications enabled")
+    print("🔒 Authentication: Session-based with bcrypt password hashing")
 
     # Database status
-    if db is not None:
-        print("✅ MongoDB connection active")
-        try:
-            stats = db.get_database_stats()
-            images_count = stats.get('images_collection', {}).get('count', 0)
-            print(f"📊 Images in MongoDB: {images_count}")
-        except:
-            print("📊 MongoDB stats not available")
-        print("🆕 New MongoDB endpoints:")
-        print("  - GET /images/near/<lat>/<lon>?radius=1.0 - Geospatial search")
-        print("  - GET /statistics/detection - Advanced detection stats")
-        print("  - GET /database/stats - Database monitoring")
-    else:
-        print("⚠️ Running in JSON mode (MongoDB not available)")
-        print(f"📊 Images in JSON database: {len(images_database)}")
+    try:
+        stats = db.get_database_stats()
+        images_count = stats.get('images_collection', {}).get('count', 0)
+        print(f"📊 Images in MongoDB: {images_count}")
+    except:
+        print("📊 MongoDB stats not available")
 
-    print("🔄 Hybrid system: MongoDB primary, JSON fallback")
-    print("📦 Automatic migration from JSON to MongoDB on startup")
+    print("🆕 MongoDB-only endpoints:")
+    print("  - GET /images/near/<lat>/<lon>?radius=1.0 - Geospatial search")
+    print("  - GET /statistics/detection - Advanced detection stats")
+    print("  - GET /database/stats - Database monitoring")
+    print("🔐 Authentication endpoints:")
+    print("  - GET/POST /login - Login and change credentials")
+    print("  - GET /logout - Logout")
+
+    print("✅ MongoDB-only system active (no JSON fallback)")
+    print("🔐 Default login: admin / admin123 (change after first login!)")
 
     app.run(host='0.0.0.0', port=5000, debug=True)
