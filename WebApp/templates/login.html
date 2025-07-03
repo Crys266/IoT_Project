@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚗 RC Car Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #333;
+        }
+
+        .login-container {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 400px;
+            backdrop-filter: blur(10px);
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo h1 {
+            font-size: 2.5em;
+            color: #667eea;
+            margin-bottom: 10px;
+        }
+
+        .logo p {
+            color: #666;
+            font-size: 1.1em;
+        }
+
+        .form-tabs {
+            display: flex;
+            margin-bottom: 30px;
+            border-radius: 10px;
+            overflow: hidden;
+            background: #f5f5f5;
+        }
+
+        .tab-btn {
+            flex: 1;
+            padding: 12px;
+            background: #f5f5f5;
+            border: none;
+            cursor: pointer;
+            font-size: 1em;
+            color: #666;
+            transition: all 0.3s ease;
+        }
+
+        .tab-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .form-container {
+            display: none;
+        }
+
+        .form-container.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #555;
+            font-weight: 600;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e1e1e1;
+            border-radius: 10px;
+            font-size: 1em;
+            transition: border-color 0.3s ease;
+            background: #fafafa;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 1.1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+
+        .btn:hover {
+            background: #5a6fd8;
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .alert {
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .alert.error {
+            background: #fee;
+            color: #c33;
+            border: 1px solid #fcc;
+        }
+
+        .alert.success {
+            background: #efe;
+            color: #363;
+            border: 1px solid #cfc;
+        }
+
+        .alert.info {
+            background: #eef;
+            color: #336;
+            border: 1px solid #ccf;
+        }
+
+        .alert.warning {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+
+        .remember-me {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .remember-me input {
+            width: auto;
+            margin-right: 8px;
+        }
+
+        .help-text {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+            text-align: center;
+        }
+
+        @media (max-width: 480px) {
+            .login-container {
+                margin: 20px;
+                padding: 30px 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <h1>🚗 RC Car</h1>
+            <p>Sistema di Controllo</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="form-tabs">
+            <button class="tab-btn active" onclick="showTab('login')">Accedi</button>
+            <button class="tab-btn" onclick="showTab('change')">Cambia Credenziali</button>
+        </div>
+
+        <!-- Messaggi -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Form Login -->
+        <div id="login-form" class="form-container active">
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+
+                <div class="remember-me">
+                    <input type="checkbox" id="remember" name="remember">
+                    <label for="remember">Ricordami</label>
+                </div>
+
+                <button type="submit" class="btn" name="action" value="login">
+                    🔐 Accedi
+                </button>
+            </form>
+
+            <div class="help-text">
+                <strong>Default:</strong> admin / admin123<br>
+                <small>Cambia la password dopo il primo accesso!</small>
+            </div>
+        </div>
+
+        <!-- Form Cambio Credenziali -->
+        <div id="change-form" class="form-container">
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label for="current_username">Username Attuale</label>
+                    <input type="text" id="current_username" name="current_username" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="current_password">Password Attuale</label>
+                    <input type="password" id="current_password" name="current_password" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="new_username">Nuovo Username (opzionale)</label>
+                    <input type="text" id="new_username" name="new_username" placeholder="Lascia vuoto per non cambiare">
+                </div>
+
+                <div class="form-group">
+                    <label for="new_password">Nuova Password (opzionale)</label>
+                    <input type="password" id="new_password" name="new_password" placeholder="Lascia vuoto per non cambiare">
+                </div>
+
+                <div class="form-group">
+                    <label for="confirm_password">Conferma Nuova Password</label>
+                    <input type="password" id="confirm_password" name="confirm_password" placeholder="Solo se cambi password">
+                </div>
+
+                <button type="submit" class="btn" name="action" value="change">
+                    ✏️ Aggiorna Credenziali
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        function showTab(tab) {
+            // Nasconde tutti i form
+            document.querySelectorAll('.form-container').forEach(container => {
+                container.classList.remove('active');
+            });
+
+            // Rimuove classe active da tutti i tab
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // Mostra il form selezionato
+            document.getElementById(tab + '-form').classList.add('active');
+
+            // Attiva il tab corrente
+            event.target.classList.add('active');
+        }
+
+        // Validazione form cambio credenziali
+        document.addEventListener('DOMContentLoaded', function() {
+            document.getElementById('change-form').addEventListener('submit', function(e) {
+                const newPassword = document.getElementById('new_password').value;
+                const confirmPassword = document.getElementById('confirm_password').value;
+                const newUsername = document.getElementById('new_username').value;
+
+                // Se sta cambiando password, deve confermarla
+                if (newPassword && newPassword !== confirmPassword) {
+                    e.preventDefault();
+                    alert('Le password non coincidono!');
+                    return;
+                }
+
+                // Deve cambiare almeno qualcosa
+                if (!newPassword && !newUsername) {
+                    e.preventDefault();
+                    alert('Devi fornire almeno un nuovo username o una nuova password!');
+                    return;
+                }
+            });
+        });
+    </script>
+</body>
+</html>
