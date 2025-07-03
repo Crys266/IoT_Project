@@ -10,6 +10,7 @@ import os
 from datetime import datetime
 from telegram_bot import notify_if_danger, register_chat_id, unregister_chat_id
 import tempfile
+from io import BytesIO
 
 # Import MongoDB database
 from database import create_surveillance_db
@@ -21,10 +22,10 @@ app = Flask(__name__)
 
 # Configurazione sicura per sessioni
 app.secret_key = generate_secret_key()
-app.config['SESSION_COOKIE_SECURE'] = False  # True solo con HTTPS
+app.config['SESSION_COOKIE_SECURE'] = False
 app.config['SESSION_COOKIE_HTTPONLY'] = True
 app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 ora
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600
 
 # Queue per frame
 frame_queue = Queue(maxsize=1)
@@ -46,53 +47,65 @@ MAX_DETECTION_AGE = 1.5
 # Configurazione colori
 red_classes_config = ['person']
 
-# Setup MongoDB 
+# Setup MongoDB
 try:
     db = create_surveillance_db()
-    print("✅ MongoDB database initialized successfully!")
+    print("✅ MongoDB database with GridFS initialized successfully!")
 except Exception as e:
     print(f"❌ FATAL: Failed to initialize MongoDB: {e}")
     print("💥 App cannot start without MongoDB connection!")
     exit(1)
 
-# AuthManager sarà inizializzato dopo la configurazione dell'app
+# AuthManager
 auth_manager = None
-
-# FR4: Image management setup
-SAVED_IMAGES_DIR = "saved_images"
-THUMBNAILS_DIR = os.path.join(SAVED_IMAGES_DIR, "thumbnails")
-
-# Create directories
-for directory in [SAVED_IMAGES_DIR, THUMBNAILS_DIR]:
-    if not os.path.exists(directory):
-        os.makedirs(directory)
 
 # Global variables for FR4
 latest_frame = None
 
-# Inizializza AuthManager dopo la configurazione dell'app
+
 def init_auth():
     global auth_manager
     auth_manager = AuthManager(db)
     print("🔐 Authentication system ready!")
 
 
-def create_thumbnail(image_path, thumbnail_path, size=(150, 150)):
+def apply_current_effects_to_image(img_data):
     try:
-        img = cv2.imread(image_path)
-        if img is not None:
-            h, w = img.shape[:2]
-            aspect = w / h
-            if aspect > 1:
-                new_w, new_h = size[0], int(size[0] / aspect)
-            else:
-                new_w, new_h = int(size[1] * aspect), size[1]
-            resized = cv2.resize(img, (new_w, new_h))
-            cv2.imwrite(thumbnail_path, resized)
-            return True
+        img_array = np.frombuffer(img_data, np.uint8)
+        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
+        if img is None:
+            print("❌ Failed to decode image for effects")
+            return img_data
+
+        print(f"🎨 Applying effects: negative={negative_effect}, detection={object_detection}")
+        detection_applied = False
+
+        if object_detection and latest_detection:
+            with detection_lock:
+                current_time = time.time()
+                if (latest_detection and
+                        current_time - latest_detection['timestamp'] <= MAX_DETECTION_AGE):
+                    boxes = latest_detection.get('boxes', [])
+                    if boxes:
+                        print(f"🔍 Applying detection: {len(boxes)} objects")
+                        img = draw_detection_boxes_on_live_frame(img, boxes)
+                        detection_applied = True
+
+        if negative_effect:
+            print("🌗 Applying negative effect")
+            img = cv2.bitwise_not(img)
+
+        ret, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
+        if ret:
+            print(f"✅ Effects applied successfully (detection: {detection_applied}, negative: {negative_effect})")
+            return buffer.tobytes()
+        else:
+            print("❌ Failed to encode processed image")
+            return img_data
+
     except Exception as e:
-        print(f"❌ Error creating thumbnail: {e}")
-    return False
+        print(f"❌ Error applying effects to image: {e}")
+        return img_data
 
 
 def draw_detection_boxes_on_live_frame(live_img, boxes_data):
@@ -124,45 +137,6 @@ def draw_detection_boxes_on_live_frame(live_img, boxes_data):
         cv2.putText(overlay_img, label_text, (text_x, text_y),
                     cv2.FONT_HERSHEY_SIMPLEX, font_scale, (255, 255, 255), text_thickness)
     return overlay_img
-
-
-def apply_current_effects_to_image(img_data):
-    try:
-        img_array = np.frombuffer(img_data, np.uint8)
-        img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
-        if img is None:
-            print("❌ Failed to decode image for effects")
-            return img_data
-        print(f"🎨 Applying effects: negative={negative_effect}, detection={object_detection}")
-        detection_applied = False
-        if object_detection and latest_detection:
-            with detection_lock:
-                current_time = time.time()
-                if (latest_detection and
-                        current_time - latest_detection['timestamp'] <= MAX_DETECTION_AGE):
-                    boxes = latest_detection.get('boxes', [])
-                    if boxes:
-                        print(f"🔍 Applying detection: {len(boxes)} objects")
-                        img = draw_detection_boxes_on_live_frame(img, boxes)
-                        detection_applied = True
-                    else:
-                        print("🔍 No detection boxes to apply")
-                else:
-                    print(
-                        f"🔍 Detection too old: age={current_time - latest_detection['timestamp'] if latest_detection else 'N/A'}s")
-        if negative_effect:
-            print("🌗 Applying negative effect")
-            img = cv2.bitwise_not(img)
-        ret, buffer = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 95])
-        if ret:
-            print(f"✅ Effects applied successfully (detection: {detection_applied}, negative: {negative_effect})")
-            return buffer.tobytes()
-        else:
-            print("❌ Failed to encode processed image")
-            return img_data
-    except Exception as e:
-        print(f"❌ Error applying effects to image: {e}")
-        return img_data
 
 
 def realtime_detection_worker():
@@ -197,15 +171,42 @@ def realtime_detection_worker():
                             gps_str = "unknown"
                             if last_gps["lat"] is not None and last_gps["lon"] is not None:
                                 gps_str = f"{last_gps['lat']:.6f},{last_gps['lon']:.6f}"
-                            with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
-                                temp_path = tmp_file.name
+
+                            # FIX: Gestione corretta file temporaneo su Windows
+                            temp_path = None
+                            try:
+                                # Crea file temporaneo
+                                with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
+                                    temp_path = tmp_file.name
+
+                                # Salva immagine
                                 cv2.imwrite(temp_path, detected_img)
-                                print("Salvato alert image in:", temp_path, "esiste?", os.path.exists(temp_path))
-                                notify_if_danger(real_boxes, gps=gps_str, image_path=temp_path)
-                                os.remove(temp_path)
+
+                                # Chiudi file esplicitamente prima di usarlo
+                                tmp_file.close()
+
+                                # Verifica esistenza
+                                if os.path.exists(temp_path):
+                                    print(f"📸 Saved temp image: {temp_path}")
+                                    notify_if_danger(real_boxes, gps=gps_str, image_path=temp_path)
+                                else:
+                                    print(f"❌ Temp file not found: {temp_path}")
+
+                            except Exception as temp_error:
+                                print(f"❌ Temp file error: {temp_error}")
+                            finally:
+                                # Cleanup sicuro
+                                if temp_path and os.path.exists(temp_path):
+                                    try:
+                                        time.sleep(0.1)  # Piccola pausa per Windows
+                                        os.remove(temp_path)
+                                        print(f"🧹 Cleaned temp file: {temp_path}")
+                                    except Exception as cleanup_error:
+                                        print(f"⚠️ Cleanup warning: {cleanup_error}")
+                                        # Non bloccare per errori di cleanup
+
                             if detection_count % 20 == 0:
-                                print(
-                                    f"⚡ LATEST #{detection_count}: {len(real_boxes)} objects in {(t1 - t0):.3f}s (age limit: {MAX_DETECTION_AGE}s)")
+                                print(f"⚡ LATEST #{detection_count}: {len(real_boxes)} objects in {(t1 - t0):.3f}s")
                     except Exception as e:
                         print(f"❌ LATEST detection error: {e}")
             else:
@@ -226,76 +227,57 @@ detection_thread.start()
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     print(f"🔐 Login route called - Method: {request.method}")
-
     if request.method == 'POST':
         action = request.form.get('action')
         print(f"🔐 Action received: {action}")
-
         if action == 'login':
             username = request.form.get('username')
             password = request.form.get('password')
             remember = request.form.get('remember')
-
             print(f"🔐 Login attempt - Username: {username}")
-
             try:
                 user = auth_manager.verify_password(username, password)
                 print(f"🔐 Password verification result: {user is not None}")
-
                 if user:
                     session['username'] = username
                     session['user_id'] = str(user['_id'])
                     if remember:
                         session.permanent = True
-
                     print(f"🔐 Session created for user: {username}")
-                    print(f"🔐 Session data: {dict(session)}")
-
                     flash('Login effettuato con successo!', 'success')
-
-                    # Prova redirect diretto invece di url_for
-                    print("🔐 Attempting redirect to /")
                     return redirect('/')
-
                 else:
                     print("🔐 Invalid credentials")
                     flash('Username o password non validi!', 'error')
             except Exception as e:
                 print(f"🔐 Login error: {e}")
                 flash(f'Errore durante il login: {str(e)}', 'error')
-
         elif action == 'change':
             current_username = request.form.get('current_username')
             current_password = request.form.get('current_password')
             new_username = request.form.get('new_username')
             new_password = request.form.get('new_password')
             confirm_password = request.form.get('confirm_password')
-
-            # Validazioni
             if new_password and new_password != confirm_password:
                 flash('Le password non coincidono!', 'error')
             elif not new_username and not new_password:
                 flash('Devi fornire almeno un nuovo username o una nuova password!', 'error')
             else:
                 try:
-                    # Applica modifiche
                     result = auth_manager.change_credentials(
                         current_username,
                         current_password,
                         new_username or None,
                         new_password or None
                     )
-
                     if result['success']:
                         flash(result['message'], 'success')
-                        # Se l'utente era loggato e ha cambiato username, aggiorna sessione
                         if session.get('username') == current_username and new_username:
                             session['username'] = new_username
                     else:
                         flash(result['message'], 'error')
                 except Exception as e:
                     flash(f'Errore durante la modifica: {str(e)}', 'error')
-
     return render_template('login.html')
 
 
@@ -306,34 +288,16 @@ def logout():
     return redirect(url_for('login'))
 
 
-@app.route('/force-login')
-def force_login():
-    """Route di test per forzare il login"""
-    # Simula login
-    session['username'] = 'admin'
-    session['user_id'] = 'test123'
-    flash('Login forzato per test!', 'success')
-    print(f"🔧 Forced login - Session: {dict(session)}")
-    return redirect('/')
-
-@app.route('/test-redirect')
-def test_redirect():
-    """Test redirect semplice"""
-    print("🔧 Testing redirect...")
-    return redirect('/')
-
-
 # ============== ROUTES PRINCIPALI ==============
 
 @app.route('/')
 @login_required
 def index():
     print(f"🏠 Index route called - Session: {dict(session)}")
-    print(f"🏠 Username in session: {session.get('username')}")
     return render_template('index.html',
-                         gps=last_gps,
-                         env=last_env,
-                         username=session.get('username'))
+                           gps=last_gps,
+                           env=last_env,
+                           username=session.get('username'))
 
 
 @app.route('/favicon.ico')
@@ -392,8 +356,6 @@ def list_saved_images():
     """Lista immagini - pubblico per visualizzazione"""
     page = request.args.get('page', 1, type=int)
     limit = request.args.get('limit', 20, type=int)
-
-    # Filtri opzionali
     filters = {}
     if request.args.get('has_detection') == 'true':
         filters['has_detection'] = True
@@ -401,10 +363,9 @@ def list_saved_images():
         filters['date_from'] = request.args.get('date_from')
     if request.args.get('date_to'):
         filters['date_to'] = request.args.get('date_to')
-
     try:
         result = db.get_images_paginated(page=page, limit=limit, filters=filters)
-        result['database'] = 'mongodb'
+        result['database'] = 'mongodb_gridfs'
         return jsonify(result)
     except Exception as e:
         print(f"❌ MongoDB query failed: {e}")
@@ -413,14 +374,78 @@ def list_saved_images():
 
 @app.route('/saved_images/<filename>')
 def serve_saved_image(filename):
-    """Serve immagini - pubblico"""
-    return send_from_directory(SAVED_IMAGES_DIR, filename)
+    """Serve immagini da GridFS tramite filename"""
+    try:
+        print(f"🖼️ Serving image: {filename}")
+
+        # Trova metadati dell'immagine tramite filename
+        image_doc = db.images.find_one({"filename": filename})
+        if not image_doc:
+            print(f"❌ Image document not found: {filename}")
+            return "Image not found", 404
+
+        gridfs_image_id = str(image_doc["gridfs_image_id"])
+        print(f"📁 GridFS image ID: {gridfs_image_id}")
+
+        # Recupera immagine da GridFS
+        image_data, metadata = db.get_image_from_gridfs(gridfs_image_id)
+        print(f"✅ Retrieved image: {len(image_data)} bytes")
+
+        return Response(
+            image_data,
+            mimetype=metadata.get('content_type', 'image/jpeg'),
+            headers={
+                'Content-Disposition': f'inline; filename="{metadata["filename"]}"',
+                'Content-Length': str(len(image_data)),
+                'Cache-Control': 'public, max-age=3600'  # Cache per 1 ora
+            }
+        )
+
+    except Exception as e:
+        print(f"❌ Error serving image {filename}: {e}")
+        import traceback
+        traceback.print_exc()
+        return "Error loading image", 500
 
 
 @app.route('/thumbnails/<filename>')
 def serve_thumbnail(filename):
-    """Serve thumbnails - pubblico"""
-    return send_from_directory(THUMBNAILS_DIR, filename)
+    """Serve thumbnails da GridFS"""
+    try:
+        print(f"🖼️ Serving thumbnail: {filename}")
+
+        # Rimuovi prefisso "thumb_" se presente per trovare l'immagine originale
+        original_filename = filename.replace("thumb_", "") if filename.startswith("thumb_") else filename
+        print(f"🔍 Looking for original: {original_filename}")
+
+        # Trova metadati dell'immagine
+        image_doc = db.images.find_one({"filename": original_filename})
+        if not image_doc:
+            print(f"❌ Image document not found for thumbnail: {original_filename}")
+            return "Thumbnail not found", 404
+
+        gridfs_thumbnail_id = str(image_doc["gridfs_thumbnail_id"])
+        print(f"📁 GridFS thumbnail ID: {gridfs_thumbnail_id}")
+
+        # Recupera thumbnail da GridFS
+        thumbnail_data, metadata = db.get_thumbnail_from_gridfs(gridfs_thumbnail_id)
+        print(f"✅ Retrieved thumbnail: {len(thumbnail_data)} bytes")
+
+        return Response(
+            thumbnail_data,
+            mimetype=metadata.get('content_type', 'image/jpeg'),
+            headers={
+                'Content-Disposition': f'inline; filename="{metadata["filename"]}"',
+                'Content-Length': str(len(thumbnail_data)),
+                'Cache-Control': 'public, max-age=3600'  # Cache per 1 ora
+            }
+        )
+
+    except Exception as e:
+        print(f"❌ Error serving thumbnail {filename}: {e}")
+        import traceback
+        traceback.print_exc()
+        return "Error loading thumbnail", 500
 
 
 @app.route('/gps', methods=['GET'])
@@ -444,7 +469,7 @@ def status_data():
     return jsonify({
         "gps": last_gps,
         "env": last_env,
-        "database": "mongodb"
+        "database": "mongodb_gridfs"
     })
 
 
@@ -458,27 +483,21 @@ def save_image():
         return jsonify(error="No frame available to save"), 400
 
     try:
-        print(f"💾 Saving image with effects: negative={negative_effect}, detection={object_detection}")
+        print(f"💾 Saving image with effects to GridFS: negative={negative_effect}, detection={object_detection}")
+
+        # Applica effetti all'immagine
         processed_frame = apply_current_effects_to_image(latest_frame)
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         filename = f"captured_{timestamp}.jpg"
-        filepath = os.path.join(SAVED_IMAGES_DIR, filename)
-        thumbnail_path = os.path.join(THUMBNAILS_DIR, f"thumb_{filename}")
 
-        # Salva file fisico
-        with open(filepath, 'wb') as f:
-            f.write(processed_frame)
-        create_thumbnail(filepath, thumbnail_path)
-
-        # Prepara metadati
+        # Prepara metadati per GridFS
         gps_str = "unknown"
         if last_gps["lat"] is not None and last_gps["lon"] is not None:
             gps_str = f"{last_gps['lat']:.6f},{last_gps['lon']:.6f}"
 
         image_record = {
             'filename': filename,
-            'filepath': filepath,
-            'thumbnail': f"thumb_{filename}",
             'size': len(processed_frame),
             'created': datetime.now().isoformat(),
             'gps': gps_str,
@@ -495,7 +514,7 @@ def save_image():
                 'negative': negative_effect,
                 'object_detection': object_detection
             },
-            'saved_by': session.get('username')  # Traccia chi ha salvato
+            'saved_by': session.get('username')
         }
 
         # Aggiungi detection results se presenti
@@ -523,14 +542,14 @@ def save_image():
                         'objects_count': int(detection_objects_count)
                     }
 
-        # Salva su MongoDB
+        # Salva in GridFS (immagine + thumbnail + metadati)
         try:
-            image_id = db.save_image_metadata(image_record)
+            image_id = db.save_image_metadata(processed_frame, image_record)
             image_record['mongodb_id'] = image_id
-            print(f"✅ Image saved to MongoDB with ID: {image_id}")
+            print(f"✅ Image saved to GridFS with ID: {image_id}")
         except Exception as e:
-            print(f"❌ MongoDB save failed: {e}")
-            return jsonify(error=f"Database save failed: {str(e)}"), 500
+            print(f"❌ GridFS save failed: {e}")
+            return jsonify(error=f"GridFS save failed: {str(e)}"), 500
 
         effects_info = []
         if negative_effect:
@@ -540,17 +559,18 @@ def save_image():
         elif object_detection:
             effects_info.append("detection(no objects)")
 
-        print(f"📸 Image saved: {filename} (GPS: {gps_str}) by {session.get('username')}")
+        print(f"📸 Image saved to GridFS: {filename} (GPS: {gps_str}) by {session.get('username')}")
 
         return jsonify(
             status="success",
             image=image_record,
             effects_applied=effects_info,
-            database="mongodb"
+            database="mongodb_gridfs",
+            storage="GridFS"
         )
 
     except Exception as e:
-        print(f"❌ Error saving image: {e}")
+        print(f"❌ Error saving image to GridFS: {e}")
         return jsonify(error=f"Failed to save image: {str(e)}"), 500
 
 
@@ -569,22 +589,15 @@ def delete_image(image_id):
         if not image:
             return jsonify(error="Image not found"), 404
 
-        # Elimina file fisici
-        if os.path.exists(image['filepath']):
-            os.remove(image['filepath'])
-        thumbnail_path = os.path.join(THUMBNAILS_DIR, image['thumbnail'])
-        if os.path.exists(thumbnail_path):
-            os.remove(thumbnail_path)
-
-        # Elimina da MongoDB
+        # Elimina da GridFS (anche thumbnail)
         if db.delete_image(image_id):
-            print(f"🗑️ Deleted image: {image['filename']} by {session.get('username')}")
-            return jsonify(status="success", message=f"Image {image['filename']} deleted")
+            print(f"🗑️ Deleted image from GridFS: {image['filename']} by {session.get('username')}")
+            return jsonify(status="success", message=f"Image {image['filename']} deleted from GridFS")
         else:
-            return jsonify(error="Failed to delete from database"), 500
+            return jsonify(error="Failed to delete from GridFS"), 500
 
     except Exception as e:
-        print(f"❌ Error deleting image: {e}")
+        print(f"❌ Error deleting image from GridFS: {e}")
         return jsonify(error=f"Failed to delete image: {str(e)}"), 500
 
 
@@ -592,23 +605,20 @@ def delete_image(image_id):
 @login_required
 def update_image_metadata(image_id):
     data = request.json
-
     try:
         updates = {}
         if 'tags' in data:
             updates['tags'] = data['tags']
         if 'description' in data:
             updates['description'] = data['description']
-
         updates['updated_by'] = session.get('username')
         updates['updated'] = datetime.now().isoformat()
-
         if db.update_image_metadata(image_id, updates):
-            return jsonify(status="success", database="mongodb")
+            return jsonify(status="success", database="mongodb_gridfs")
         else:
             return jsonify(error="Failed to update image"), 500
     except Exception as e:
-        print(f"❌ MongoDB update error: {e}")
+        print(f"❌ GridFS update error: {e}")
         return jsonify(error=f"Update failed: {str(e)}"), 500
 
 
@@ -623,25 +633,33 @@ def send_image_telegram(image_id):
             if str(img['id']) == str(image_id):
                 image = img
                 break
-
         if not image:
             return jsonify(error="Image not found"), 404
 
-        path = image['filepath']
+        # Recupera immagine da GridFS
+        gridfs_image_id = image['gridfs_image_id']
+        image_data, metadata = db.get_image_from_gridfs(gridfs_image_id)
+
+        # Salva temporaneamente per Telegram
+        with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as tmp_file:
+            tmp_file.write(image_data)
+            temp_path = tmp_file.name
+
         label_info = ""
         if image.get('detection_results'):
             detected = image['detection_results']
             label_info = f"\nOggetti: {', '.join([b['label'] for b in detected['boxes']])}"
         gps_str = image.get('gps', 'unknown')
+        caption = f"Immagine dalla gallery GridFS (inviata da {session.get('username')}).{label_info}"
 
-        caption = f"Immagine dalla gallery (inviata da {session.get('username')}).{label_info}"
+        def send_and_cleanup():
+            try:
+                notify_if_danger([], gps_str, temp_path, caption=caption)
+            finally:
+                os.remove(temp_path)
 
-        threading.Thread(
-            target=notify_if_danger,
-            args=([], gps_str, path),
-            kwargs={'image_path': path, 'caption': caption}
-        ).start()
-        return jsonify(status="sent")
+        threading.Thread(target=send_and_cleanup, daemon=True).start()
+        return jsonify(status="sent", storage="GridFS")
     except Exception as e:
         return jsonify(error=str(e)), 500
 
@@ -714,14 +732,13 @@ def set_max_age():
 def images_near_location(lat, lon):
     """Trova immagini vicine a coordinate specifiche"""
     radius_km = request.args.get('radius', 1.0, type=float)
-
     try:
         images = db.find_images_near_location(lat, lon, radius_km)
         return jsonify({
             "images": images,
             "query": {"lat": lat, "lon": lon, "radius_km": radius_km},
             "count": len(images),
-            "database": "mongodb"
+            "database": "mongodb_gridfs"
         })
     except Exception as e:
         return jsonify(error=f"Geospatial query failed: {str(e)}"), 500
@@ -734,10 +751,9 @@ def detection_statistics():
     date_from = request.args.get('date_from')
     date_to = request.args.get('date_to')
     date_range = (date_from, date_to) if date_from and date_to else None
-
     try:
         stats = db.get_detection_statistics(date_range)
-        stats['database'] = 'mongodb'
+        stats['database'] = 'mongodb_gridfs'
         return jsonify(stats)
     except Exception as e:
         return jsonify(error=f"Statistics query failed: {str(e)}"), 500
@@ -749,7 +765,7 @@ def database_stats():
     """Statistiche del database per monitoring"""
     try:
         stats = db.get_database_stats()
-        stats['database'] = 'mongodb'
+        stats['database'] = 'mongodb_gridfs'
         return jsonify(stats)
     except Exception as e:
         return jsonify(error=f"Database stats failed: {str(e)}"), 500
@@ -807,15 +823,14 @@ def gen_frames():
                                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
                     cv2.putText(img, f"Waiting for objects... #{detection_count}",
                                 (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
-                    cv2.putText(img, f"Max age: {MAX_DETECTION_AGE}s (INCREASED)",
+                    cv2.putText(img, f"Max age: {MAX_DETECTION_AGE}s (GridFS Storage)",
                                 (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 0), 2)
         ret, buffer = cv2.imencode('.jpg', img)
         t1 = time.time()
         frame_time = round((t1 - t0) * 1000)
         if frame_count % 300 == 0:
             fps = 1000 / max(frame_time, 1)
-            print(
-                f"[LIVE #{frame_count}] {frame_time}ms (~{fps:.1f}fps) | REALTIME mode | Detection age limit: {MAX_DETECTION_AGE}s")
+            print(f"[LIVE #{frame_count}] {frame_time}ms (~{fps:.1f}fps) | GridFS Storage")
         frame = buffer.tobytes()
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
@@ -848,10 +863,8 @@ def telegram_webhook():
 # ============== STARTUP ==============
 
 if __name__ == '__main__':
-    # Inizializza l'authentication manager dopo che l'app è configurata
     init_auth()
-
-    print("🚀 Flask ESP32-CAM with MongoDB ONLY + Authentication System")
+    print("🚀 Flask ESP32-CAM with MongoDB GridFS ONLY + Authentication System")
     print("🔐 Login required for RC car controls")
     print("📹 Video: Live stream with ZERO accumulation")
     print("🔍 Detection: ONLY LATEST - no old results!")
@@ -859,27 +872,27 @@ if __name__ == '__main__':
     print("🔴 RED: person | 🟢 GREEN: all other objects")
     print("📍 Labels: ABOVE boxes, horizontally centered")
     print("⚡ REALTIME MODE: Scarta tutto il vecchio!")
-    print("📸 FR4: Image saving with effects applied (negative + detection)!")
+    print("📸 FR4: Image saving with GridFS storage!")
     print("🤖 Telegram Bot: Multi-user notifications enabled")
     print("🔒 Authentication: Session-based with bcrypt password hashing")
+    print("🗄️ GridFS: Complete file storage in MongoDB")
 
     # Database status
     try:
         stats = db.get_database_stats()
         images_count = stats.get('images_collection', {}).get('count', 0)
+        gridfs_files = stats.get('gridfs', {}).get('images_files', 0)
         print(f"📊 Images in MongoDB: {images_count}")
+        print(f"📁 GridFS files: {gridfs_files}")
     except:
         print("📊 MongoDB stats not available")
 
-    print("🆕 MongoDB-only endpoints:")
-    print("  - GET /images/near/<lat>/<lon>?radius=1.0 - Geospatial search")
-    print("  - GET /statistics/detection - Advanced detection stats")
-    print("  - GET /database/stats - Database monitoring")
-    print("🔐 Authentication endpoints:")
-    print("  - GET/POST /login - Login and change credentials")
-    print("  - GET /logout - Logout")
-
-    print("✅ MongoDB-only system active (no JSON fallback)")
+    print("🆕 GridFS endpoints:")
+    print("  - GET/POST /save_image - Saves to GridFS")
+    print("  - GET /saved_images/<filename> - Serves from GridFS")
+    print("  - GET /thumbnails/<filename> - Serves thumbnails from GridFS")
+    print("  - DELETE /delete_image/<id> - Deletes from GridFS")
+    print("✅ GridFS-only system active (no filesystem dependencies)")
     print("🔐 Default login: admin / admin123 (change after first login!)")
 
     app.run(host='0.0.0.0', port=5000, debug=True)
