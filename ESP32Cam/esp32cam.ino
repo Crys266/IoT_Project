@@ -1,17 +1,54 @@
 #include "esp_camera.h"
 #include <WiFi.h>
+#include <vector>
 
 // ===========================
 // WiFi Configuration
 // ===========================
 const char* ssid = "Yubu";
 const char* password = "Geova666";
-const char* flask_server = "10.158.41.187";
+const char* flask_server = "10.189.14.187";
 const int flask_port = 5000;
 
 // ===========================
-// CAMERA PINS (AI Thinker)
+// MOTOR PINS - CONFIGURAZIONE CONDIVISA
 // ===========================
+struct MOTOR_PINS {
+  int pinEn;   // PWM Enable
+  int pinIN1;  // Direction 1
+  int pinIN2;  // Direction 2
+};
+
+std::vector<MOTOR_PINS> motorPins = {
+  {12, 13, 15},  // RIGHT_MOTOR (En=12, IN1=13, IN2=15)
+  {12, 14, 2},   // LEFT_MOTOR  (En=12, IN3=14, IN4=2)
+};
+
+#define FLASH_LED_PIN 4
+
+#define RIGHT_MOTOR 0
+#define LEFT_MOTOR 1
+#define FORWARD 1
+#define BACKWARD -1
+#define STOP 0
+
+// PWM Configuration
+const int PWMFreq = 1000;
+const int PWMResolution = 8;
+const int MAX_SPEED = 255;  // SEMPRE VELOCITÀ MASSIMA
+
+// ===========================
+// CONTROLLO CONTINUO - LOGICA SEMPLIFICATA
+// ===========================
+String currentCommand = "";
+String lastActiveCommand = "";
+unsigned long lastCommandTime = 0;
+const unsigned long COMMAND_TIMEOUT = 500;  // MOLTO PIÙ LUNGO: 5 secondi
+
+bool motorsActive = false;
+bool systemInitialized = false;  // NUOVO: evita attivazioni durante init
+
+// CAMERA PINS
 #define PWDN_GPIO_NUM     32
 #define RESET_GPIO_NUM    -1
 #define XCLK_GPIO_NUM      0
@@ -29,82 +66,102 @@ const int flask_port = 5000;
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
-// ===========================
-// FLASH LED (AI Thinker)
-#define FLASH_LED_PIN 4
-
-// ===========================
-// MOTOR PINS (evitando conflitti camera)
-#define ENA 2     // PWM motore A
-#define ENB 16    // PWM motore B  
-#define IN1 14    // Controllo motore A
-#define IN2 15    // Controllo motore A
-#define IN3 13    // Controllo motore B
-#define IN4 12    // Controllo motore B
-
-// ===========================
-// UART PINS for NodeMCU communication
-#define NODEMCU_RX 3  // U0RXD (ESP32-CAM RX) -- collegato a TX NodeMCU
-#define NODEMCU_TX 1  // U0TXD (ESP32-CAM TX) -- collegato a RX NodeMCU
-
-// ===========================
-// PWM Configuration
-#define PWM_FREQ 1000
-#define PWM_RESOLUTION 8
+#define NODEMCU_RX 3
+#define NODEMCU_TX 1
 
 #include <HardwareSerial.h>
-HardwareSerial nodeSerial(1); // UART0, ma con pin swap
+HardwareSerial nodeSerial(1);
 
-String nodeData = "";   // Ricevi dati aggregati da NodeMCU: "lat,lon,temp,hum"
 float latitude = 0.0, longitude = 0.0, temperature = 0.0, humidity = 0.0;
-
-String currentCommand = "";
-unsigned long lastCommandTime = 0;
-const unsigned long COMMAND_TIMEOUT = 2000; // 2 secondi timeout
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("=== ESP32-CAM FULL SYSTEM + UART NodeMCU ===");
-
-  // Setup Motor Pins
-  setupMotors();
-  // WiFi Connection
+  Serial.println("=== ESP32-CAM CONTINUOUS CONTROL ===");
+  
+  // IMPORTANTE: Inizializza tutto PRIMA di attivare il sistema
+  systemInitialized = false;
+  
+  setupMotors();        // Motori in STOP sicuro
+  setupFlash();         // Flash OFF sicuro
   setupWiFi();
-  // Camera Setup (ottimizzata)
   setupCamera();
-  // UART Setup (NodeMCU)
   nodeSerial.begin(9600, SERIAL_8N1, NODEMCU_RX, NODEMCU_TX);
 
-  Serial.println("=== SYSTEM READY ===");
-  Serial.println("📹 Video streaming: ON");
-  Serial.println("🚗 Motor control: ON");
-  Serial.println("📡 UART NodeMCU: ON");
-  // Setup Flash LED
-  pinMode(FLASH_LED_PIN, OUTPUT);
-  digitalWrite(FLASH_LED_PIN, LOW);  // Inizialmente spento
-  Serial.println("💡 Flash LED: OFF (default)");
+  // STOP FINALE di sicurezza
+  hardStop();
+  
+  // ORA il sistema è pronto
+  systemInitialized = true;
+  
+  Serial.println("=== SYSTEM READY - CONTINUOUS MODE ===");
+  Serial.printf("⚡ Max Speed: %d/255 (100%%)\n", MAX_SPEED);
+  Serial.printf("⏰ Command Timeout: %dms\n", COMMAND_TIMEOUT);
+  Serial.println("🎮 Press and HOLD commands for continuous movement");
 }
 
 void setupMotors() {
-  Serial.println("🔧 Setting up motors...");
-  ledcAttach(ENA, PWM_FREQ, PWM_RESOLUTION);
-  ledcAttach(ENB, PWM_FREQ, PWM_RESOLUTION);
-  pinMode(IN1, OUTPUT);
-  pinMode(IN2, OUTPUT);
-  pinMode(IN3, OUTPUT);
-  pinMode(IN4, OUTPUT);
-  stopMotors();
-  Serial.println("✅ Motors configured");
+  Serial.println("🔧 Setting up motors in SAFE mode...");
+  
+  for (int i = 0; i < motorPins.size(); i++) {
+    // Prima configura come OUTPUT e metti LOW
+    pinMode(motorPins[i].pinIN1, OUTPUT);
+    pinMode(motorPins[i].pinIN2, OUTPUT);
+    digitalWrite(motorPins[i].pinIN1, LOW);
+    digitalWrite(motorPins[i].pinIN2, LOW);
+    
+    // Poi configura PWM e metti a 0
+    ledcAttach(motorPins[i].pinEn, PWMFreq, PWMResolution);
+    ledcWrite(motorPins[i].pinEn, 0);
+    
+    Serial.printf("Motor %d: SAFE INIT - En=%d, IN1=%d, IN2=%d\n", 
+                  i, motorPins[i].pinEn, motorPins[i].pinIN1, motorPins[i].pinIN2);
+  }
+  
+  motorsActive = false;
+  currentCommand = "";
+  Serial.println("✅ Motors initialized in STOP state");
+}
+
+void setupFlash() {
+  Serial.println("💡 Setting up flash in SAFE mode...");
+  pinMode(FLASH_LED_PIN, OUTPUT);
+  digitalWrite(FLASH_LED_PIN, LOW);  // FORZATAMENTE OFF
+  Serial.printf("✅ Flash LED (GPIO%d): FORCED OFF\n", FLASH_LED_PIN);
+}
+
+void hardStop() {
+  Serial.println("🛑 HARD STOP - Complete system reset");
+  
+  // STOP MOTORI
+  for (int i = 0; i < motorPins.size(); i++) {
+    digitalWrite(motorPins[i].pinIN1, LOW);
+    digitalWrite(motorPins[i].pinIN2, LOW);
+    ledcWrite(motorPins[i].pinEn, 0);
+  }
+  
+  // FLASH OFF
+  digitalWrite(FLASH_LED_PIN, LOW);
+  
+  // RESET VARIABILI
+  motorsActive = false;
+  currentCommand = "";
+  lastActiveCommand = "";
+  
+  Serial.println("✅ HARD STOP completed");
 }
 
 void setupWiFi() {
   Serial.println("🌐 Connecting to WiFi...");
   WiFi.begin(ssid, password);
   WiFi.setSleep(false);
+  
   while (WiFi.status() != WL_CONNECTED) {
     delay(500);
     Serial.print(".");
+    // MANTIENI STOP durante connessione
+    hardStop();
   }
+  
   Serial.println("\n✅ WiFi connected!");
   Serial.print("📡 IP: ");
   Serial.println(WiFi.localIP());
@@ -135,21 +192,18 @@ void setupCamera() {
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_JPEG;
 
-  // AUTODETECT PSRAM
   if(psramFound()) {
-      config.frame_size = FRAMESIZE_SVGA; // 800x600
+      config.frame_size = FRAMESIZE_SVGA;
       config.jpeg_quality = 8;
       config.fb_count = 2;
       config.fb_location = CAMERA_FB_IN_PSRAM;
       config.grab_mode = CAMERA_GRAB_LATEST;
-      Serial.println("PSRAM FOUND: SVGA, double buffer");
   } else {
-      config.frame_size = FRAMESIZE_VGA; // 640x480
+      config.frame_size = FRAMESIZE_VGA;
       config.jpeg_quality = 10;
       config.fb_count = 1;
       config.fb_location = CAMERA_FB_IN_DRAM;
       config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
-      Serial.println("NO PSRAM: VGA, single buffer");
   }
 
   esp_err_t err = esp_camera_init(&config);
@@ -158,56 +212,155 @@ void setupCamera() {
     return;
   }
 
-  // Camera optimizations
   sensor_t * s = esp_camera_sensor_get();
-  if (s == nullptr) {
-    Serial.println("❌ Camera sensor not available!");
-    return;
+  if (s != nullptr) {
+    s->set_vflip(s, 1);
+    s->set_hmirror(s, 1);
+    s->set_brightness(s, 1);
+    s->set_contrast(s, 2);
   }
-  s->set_vflip(s, 1);
-  s->set_hmirror(s, 1);
-  s->set_brightness(s, 1);
-  s->set_contrast(s, 2);
-  s->set_saturation(s, 1);
-  s->set_sharpness(s, 1);
 
-  Serial.println("✅ Camera configured (SVGA, qualità 8, double buffer)");
+  Serial.println("✅ Camera configured");
 }
 
 void loop() {
-  unsigned long t0 = millis();
+  // NON fare nulla se il sistema non è inizializzato
+  if (!systemInitialized) {
+    delay(100);
+    return;
+  }
+  
   readNodeMCU();
-  unsigned long t1 = millis();
+  
+  // LOGICA SEMPLIFICATA: leggi comando e applica immediatamente
   String newCommand = getCommandFromFlask();
+  
   if (newCommand.length() > 0) {
+    // AGGIORNA SEMPRE il comando e il timestamp
     currentCommand = newCommand;
     lastCommandTime = millis();
-    Serial.printf("📨 New command: '%s'\n", currentCommand.c_str());
+    
+    // ESEGUI IMMEDIATAMENTE
+    executeCommand(currentCommand);
   }
-  unsigned long t2 = millis();
-  executeMotorCommand();
-  unsigned long t3 = millis();
-
-  Serial.printf("Timing: UART=%lums, GetCmd=%lums, MotorCmd=%lums\n", t1-t0, t2-t1, t3-t2);
-
-  unsigned long t_send0 = millis();
+  
+  // TIMEOUT: se non arrivano comandi per troppo tempo, ferma
+  checkCommandTimeout();
+  
   sendVideoFrame();
-  unsigned long t_send1 = millis();
-  Serial.printf("Timing: sendVideoFrame=%lums (Full loop=%lums)\n", t_send1-t_send0, t_send1-t0);
-
-  delay(10); // o quello che vuoi
+  
+  delay(5);  // Veloce per responsività
 }
 
-// ============ UART DA NODEMCU ==============
-// Ricevi i dati dalla NodeMCU: es. "45.12345,9.12345,24.5,60.1"
+void executeCommand(String cmd) {
+  // NON STAMPARE SE È LO STESSO COMANDO (evita spam)
+  if (cmd != lastActiveCommand) {
+    Serial.printf("🎮 COMMAND: '%s'\n", cmd.c_str());
+    lastActiveCommand = cmd;
+  }
+  
+  if (cmd == "n") {
+    digitalWrite(FLASH_LED_PIN, HIGH);
+  } 
+  else if (cmd == "m") {
+    digitalWrite(FLASH_LED_PIN, LOW);
+  }
+  else if (cmd == "avanti" || cmd == "a") {
+    moveForward();
+  } 
+  else if (cmd == "indietro" || cmd == "i") {
+    moveBackward();
+  } 
+  else if (cmd == "sinistra" || cmd == "s") {
+    turnLeft();
+  } 
+  else if (cmd == "destra" || cmd == "d") {
+    turnRight();
+  } 
+  else {
+    // QUALSIASI ALTRO COMANDO (incluso "stop" o vuoto) = STOP
+    stopMotors();
+  }
+}
+
+void checkCommandTimeout() {
+  unsigned long now = millis();
+  
+  // Se non arrivano comandi da troppo tempo, ferma tutto
+  if (now - lastCommandTime > COMMAND_TIMEOUT) {
+    if (motorsActive) {
+      Serial.printf("⏰ TIMEOUT (%dms) - stopping\n", COMMAND_TIMEOUT);
+      stopMotors();
+    }
+  }
+}
+
+void rotateMotor(int motorNumber, int motorDirection) {
+  if (motorDirection == FORWARD) {
+    digitalWrite(motorPins[motorNumber].pinIN1, HIGH);
+    digitalWrite(motorPins[motorNumber].pinIN2, LOW);
+  }
+  else if (motorDirection == BACKWARD) {
+    digitalWrite(motorPins[motorNumber].pinIN1, LOW);
+    digitalWrite(motorPins[motorNumber].pinIN2, HIGH);
+  }
+  else {
+    digitalWrite(motorPins[motorNumber].pinIN1, LOW);
+    digitalWrite(motorPins[motorNumber].pinIN2, LOW);
+  }
+}
+
+void setMotorSpeed(int speed) {
+  for (int i = 0; i < motorPins.size(); i++) {
+    ledcWrite(motorPins[i].pinEn, speed);
+  }
+}
+
+// FUNZIONI MOVIMENTO - SEMPRE VELOCITÀ MASSIMA
+void moveForward() {
+  rotateMotor(RIGHT_MOTOR, FORWARD);
+  rotateMotor(LEFT_MOTOR, FORWARD);
+  setMotorSpeed(MAX_SPEED);  // SEMPRE 255
+  motorsActive = true;
+}
+
+void moveBackward() {
+  rotateMotor(RIGHT_MOTOR, BACKWARD);
+  rotateMotor(LEFT_MOTOR, BACKWARD);
+  setMotorSpeed(MAX_SPEED);  // SEMPRE 255
+  motorsActive = true;
+}
+
+void turnLeft() {
+  rotateMotor(RIGHT_MOTOR, FORWARD);
+  rotateMotor(LEFT_MOTOR, BACKWARD);
+  setMotorSpeed(MAX_SPEED);  // SEMPRE 255
+  motorsActive = true;
+}
+
+void turnRight() {
+  rotateMotor(RIGHT_MOTOR, BACKWARD);
+  rotateMotor(LEFT_MOTOR, FORWARD);
+  setMotorSpeed(MAX_SPEED);  // SEMPRE 255
+  motorsActive = true;
+}
+
+void stopMotors() {
+  rotateMotor(RIGHT_MOTOR, STOP);
+  rotateMotor(LEFT_MOTOR, STOP);
+  setMotorSpeed(0);
+  motorsActive = false;
+}
+
+// Funzioni NodeMCU e network (invariate)
 void readNodeMCU() {
   static char buffer[64];
   static uint8_t idx = 0;
   while (nodeSerial.available()) {
     char c = nodeSerial.read();
     if (c == '\n') {
-      buffer[idx] = 0; // chiusura stringa
-      parseNodeData(buffer); // Passa la stringa completa
+      buffer[idx] = 0;
+      parseNodeData(buffer);
       idx = 0;
     } else if (idx < sizeof(buffer) - 1 && c != '\r') {
       buffer[idx++] = c;
@@ -216,7 +369,6 @@ void readNodeMCU() {
 }
 
 void parseNodeData(const char* data) {
-  // Attenzione: formato atteso "lat,lon,temp,hum"
   float lat, lon, temp, hum;
   if (sscanf(data, "%f,%f,%f,%f", &lat, &lon, &temp, &hum) == 4) {
     latitude = lat;
@@ -226,8 +378,6 @@ void parseNodeData(const char* data) {
   }
 }
 
-// ============ NETWORK & CONTROL =============
-
 String getCommandFromFlask() {
   WiFiClient client;
   String command = "";
@@ -236,29 +386,28 @@ String getCommandFromFlask() {
     client.print("Host: ");
     client.print(flask_server);
     client.print("\r\nConnection: close\r\n\r\n");
+    
     unsigned long timeout = millis();
     String header = "";
-    // Leggi header riga per riga, senza bloccare
     while (client.connected()) {
       if (client.available()) {
         char c = client.read();
         header += c;
-        // Quando trovi fine header, esci
         if (header.endsWith("\r\n\r\n")) break;
       }
-      if (millis() - timeout > 300) {
+      if (millis() - timeout > 200) {  // Timeout ridotto per velocità
         client.stop();
         return "";
       }
     }
-    // Ora leggi solo il body
+    
     String body = "";
     timeout = millis();
     while (client.connected()) {
       if (client.available()) {
         char c = client.read();
         body += c;
-      } else if (millis() - timeout > 100) {
+      } else if (millis() - timeout > 50) {  // Timeout ridotto
         break;
       }
     }
@@ -269,38 +418,9 @@ String getCommandFromFlask() {
   return "";
 }
 
-void executeMotorCommand() {
-  if (millis() - lastCommandTime > COMMAND_TIMEOUT) {
-    if (currentCommand != "") {
-      currentCommand = "";
-      stopMotors();
-      Serial.println("⏰ Command timeout - stopping motors");
-    }
-    return;
-  }
-  if (currentCommand == "avanti" || currentCommand == "a") {
-    moveForward();
-  } else if (currentCommand == "indietro" || currentCommand == "i") {
-    moveBackward();
-  } else if (currentCommand == "sinistra" || currentCommand == "s")  {
-    turnLeft();
-  } else if (currentCommand == "destra" || currentCommand == "d") {
-    turnRight();
-  }else if (currentCommand == "n_flash_on" || currentCommand == "n") {
-    digitalWrite(FLASH_LED_PIN, HIGH);
-    Serial.println("💡 Flash LED: ON");
-  } else if (currentCommand == "m_flash_off" || currentCommand == "m") {
-    digitalWrite(FLASH_LED_PIN, LOW);
-    Serial.println("💡 Flash LED: OFF");
-  }  else {
-    stopMotors();
-  }
-}
-
 void sendVideoFrame() {
   camera_fb_t * fb = esp_camera_fb_get();
   if (!fb) {
-    Serial.println("❌ Camera capture failed");
     return;
   }
 
@@ -313,7 +433,7 @@ void sendVideoFrame() {
     client.print("Content-Type: image/jpeg\r\n");
     client.print("Content-Length: ");
     client.print(fb->len);
-    // Invio posizione GPS e temperatura come header custom
+    
     client.print("\r\nX-GPS: ");
     client.print(latitude, 6);
     client.print(",");
@@ -323,54 +443,9 @@ void sendVideoFrame() {
     client.print(",");
     client.print(humidity, 2);
     client.print("\r\n\r\n");
+    
     client.write(fb->buf, fb->len);
     client.stop();
   }
   esp_camera_fb_return(fb);
-}
-
-// MOTOR CONTROL FUNCTIONS (NUOVA API)
-void moveForward() {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-  ledcWrite(ENA, 220);
-  ledcWrite(ENB, 220);
-}
-
-void moveBackward() {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
-  ledcWrite(ENA, 220);
-  ledcWrite(ENB, 220);
-}
-
-void turnLeft() {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, HIGH);
-  digitalWrite(IN3, HIGH);
-  digitalWrite(IN4, LOW);
-  ledcWrite(ENA, 180);
-  ledcWrite(ENB, 180);
-}
-
-void turnRight() {
-  digitalWrite(IN1, HIGH);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, HIGH);
-  ledcWrite(ENA, 180);
-  ledcWrite(ENB, 180);
-}
-
-void stopMotors() {
-  digitalWrite(IN1, LOW);
-  digitalWrite(IN2, LOW);
-  digitalWrite(IN3, LOW);
-  digitalWrite(IN4, LOW);
-  ledcWrite(ENA, 0);
-  ledcWrite(ENB, 0);
 }
