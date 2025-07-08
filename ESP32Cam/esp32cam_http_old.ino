@@ -5,9 +5,9 @@
 // ===========================
 // WiFi Configuration
 // ===========================
-const char* ssid = "Yubu";
-const char* password = "Geova666";
-const char* flask_server = "10.189.14.187";
+const char* ssid = "";
+const char* password = "";
+const char* flask_server = "";
 const int flask_port = 5000;
 
 // ===========================
