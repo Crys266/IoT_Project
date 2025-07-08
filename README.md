@@ -1,222 +1,188 @@
 # IoT_Project
+
 # 🛻 Radio-Controlled Car for Surveillance and Data Retrieval
 
 ## 📌 Project Overview
 
-This project involves the development of a Radio-Controlled (RC) Car designed for surveillance and data retrieval in specific environments. The RC Car is equipped with sensors and control systems to collect useful information in remote or hard-to-reach areas.
+This project implements a radio-controlled (RC) car for surveillance and data retrieval in challenging environments, integrating live video, environmental sensors, object detection, GPS, and a user-friendly web dashboard. The current architecture emphasizes real-time performance, efficient data storage, seamless notifications, and extensibility for future upgrades.
 
-### Example Applications:
-- **Surveillance**: Using cameras to monitor areas that are difficult to access or require security oversight.
-- **Data Retrieval**: Gathering environmental data such as temperature, humidity, or gas concentration, or mapping terrain in exploration scenarios.
+---
 
-To fulfill these goals, the RC Car includes a camera for real-time image acquisition, enabling remote operation over a network connection. The control interface allows the user to:
+## ❗️ Architectural Update (2025)
 
-- Steer the vehicle
-- Adjust speed and direction
-- Toggle lights
-- Manage onboard sensors
+**This README reflects the latest system architecture. Files with `http_old` in the name are deprecated and no longer used — do not reference or use them. The system now uses:**
 
-Additional functionalities include capturing image frames, analyzing them using object recognition techniques, and sending notifications based on detected objects. The system can also automate alerts when specific labels (e.g., dangerous objects) are identified.
+- WebSocket-based communication for real-time, low-latency video and control
+- MongoDB + GridFS for robust, scalable image and metadata storage
+- Telegram Bot for instant notifications of detected objects/events
+- Modern, modular codebase ready for new features and sensors
 
 ---
 
 ## ✅ Functional Requirements
 
-| ID   | Title                      | Requirement Description                                                                 | Input                                | Output                                   |
-|------|----------------------------|------------------------------------------------------------------------------------------|--------------------------------------|------------------------------------------|
-| FR1  | Remote Vehicle Control     | The system enables an operator to drive the RC Car remotely through the control interface.| User commands (steering, speed, direction) | RC Car movement                          |
-| FR2  | Real-time Image Retrieval  | The system retrieves real-time image data using the camera and displays it on the interface.| Camera stream from the RC Car         | Real-time video stream on the interface |
-| FR3  | Sensor Management          | The system allows monitoring of environmental and operational parameters via onboard sensors. Sensor readings are collected at a high sampling rate and periodically transmitted to the remote system for visualization.| Sensor data                          | Sensor readings displayed on the interface |
-| FR4  | Data Saving                | The operator can save specific image frames for further analysis.                         | User command to save an image         | Image frame saved                        |
-| FR5  | Object Recognition         | The system analyzes saved images using a machine learning algorithm to identify objects.  | Saved image frames                    | Recognized objects and their labels      |
-| FR6  | Automated Notifications    | The system sends notifications to subscribers when specific objects (e.g., dangerous items) are detected.| Object labels identified             | Notifications sent to the user           |
-| FR7  | GPS Module Integration     | The RC Car provides its current position.                                                 | Coordinates from the GPS module       | Current location displayed in the interface |
+| ID   | Title                      | Description                                                            |
+|------|----------------------------|------------------------------------------------------------------------|
+| FR1  | Remote Vehicle Control     | Drive the RC Car remotely in real-time                                 |
+| FR2  | Real-time Video Streaming  | Live camera stream with low latency                                    |
+| FR3  | Sensor Management          | Collect and visualize environmental & operational data                 |
+| FR4  | Image Frame Saving         | Save specific frames for later analysis                                |
+| FR5  | Automatic Object Detection | YOLOv3 object recognition on demand or automatically                   |
+| FR6  | Telegram Notifications     | Instant alerts for specified detected objects                          |
+| FR7  | GPS Position Tracking      | Real-time location displayed in the web dashboard                      |
 
 ---
 
-## 📋 Non-Functional Requirements
-
-| ID   | Title                 | Description                                                                                   |
-|------|-----------------------|-----------------------------------------------------------------------------------------------|
-| NFR1 | System Responsiveness | The control interface must respond to user commands within an acceptable waiting time.        |
-| NFR2 | Battery Efficiency    | The system should operate for at least 1 hour on a fully charged battery under standard conditions. |
-| NFR3 | Scalability           | The system must allow integration of additional sensors and features without significant performance degradation. |
-| NFR4 | Durability            | The RC Car must withstand outdoor use, including minor impacts and vibrations.                |
-| NFR5 | Ease of Use           | The control interface must be intuitive for operators with no technical expertise.            |
-| NFR6 | Affordability         | The device must be cost-effective to attract a wide range of customers.                       |
----
-
-## 🔧 Main Hardware Components
-
-- **ESP32** – Handles Wi-Fi connectivity and communication with the WebApp  
-- **Arduino** – Manages sensor data collection  
-- **Camera Module** – Provides live video feed  
-- **Sensor Modules** – For temperature, gas, ultrasonic distance, etc.  
-- **GPS Module** – For real-time location tracking  
-- **Telegram Bot** – For automated user notifications
-
-
-# 🚗 ESP32-CAM Robot Car con Streaming Video e Controllo Remoto via Flask
-
-Questo progetto combina un'applicazione web Flask con un firmware per **ESP32-CAM** che consente:
-- streaming video in tempo reale,
-- comandi di movimento (avanti, indietro, sinistra, destra),
-- effetti visivi e rilevamento oggetti (YOLOv3) lato server.
-
----
-
-## 🧱 Componenti del Sistema
-
-### 🧠 **Backend Web (Python + Flask)**
-
-- Riceve immagini dalla ESP32-CAM
-- Visualizza lo stream video in tempo reale
-- Applica effetti:
-  - 🔄 Effetto negativo
-  - 🔍 Rilevamento oggetti (YOLOv3)
-- Riceve comandi di movimento da UI e li espone via API
-
-### 🔧 **Firmware ESP32-CAM (C++)**
-
-- Si connette al WiFi
-- Cattura frame JPEG e li invia al server Flask via HTTP POST
-- Legge il comando da Flask via HTTP GET
-- Controlla due motori DC per movimento (avanti/indietro, sterzata)
-
----
-
-## 📁 Struttura del Progetto
+## 🏗️ System Architecture
 
 ```
-.
-├── app.py                    # Server Flask
-├── object_detection.py       # YOLOv3 con OpenCV
-├── templates/
-│   └── index.html            # Interfaccia utente web
-├── static/
-│   ├── yolov3.weights        # Pesi YOLOv3
-│   ├── yolov3.cfg            # Configurazione YOLOv3
-│   └── coco.names            # Classi COCO
+    +------------------+       WebSocket      +-----------------------+      HTTP/WebSocket        +------------------------+
+    |   ESP32-CAM      | <------------------> |  Flask WebSocket/HTTP | <-----------------------> |    Web Dashboard UI    |
+    +------------------+                      |   (app_ws.py)         |                          +------------------------+
+         |   |   |                            +-----------------------+      REST API
+         |   |   |                                      |
+         |   |   +-- UART/Serial <----> NodeMCU (GPS, DHT11, etc.)
+         |
+         +--- DC Motors (PWM), Camera, Sensors
+```
+
+- **Video and sensor data** is streamed from the ESP32-CAM to Flask via WebSocket for near real-time processing and visualization.
+- **Object detection** runs in a dedicated thread for speed, notifying the user via Telegram only for relevant events (e.g., "person" detected).
+- **Images and metadata** are saved to MongoDB/GridFS, including thumbnails and environmental data.
+- **Web dashboard** provides real-time control, gallery, and sensor views, all via WebSocket/REST API.
+
+---
+
+## 📁 Project Structure
+
+```
+IoT_Project/
+├── WebApp/
+│   ├── app_ws.py              # Main Flask + WebSocket backend (use this)
+│   ├── object_detection.py    # YOLOv3 detection logic
+│   ├── database.py            # MongoDB/GridFS storage
+│   ├── telegram_bot.py        # Telegram Bot integration
+│   ├── auth.py                # User authentication system
+│   ├── static/
+│   │   ├── yolov3.weights     # YOLOv3 weights
+│   │   ├── yolov3.cfg         # YOLOv3 config
+│   │   ├── coco.names         # COCO labels
+│   │   └── styles.css         # Web dashboard CSS
+│   └── templates/
+│       ├── index_ws.html      # Web dashboard UI (WebSocket-based)
+│       └── login.html         # Login interface
 ├── esp32_cam/
-│   ├── main.ino              # Firmware Arduino ESP32-CAM
-│   └── camera_pins.h         # Pinout AI Thinker
+│   ├── main.ino               # ESP32-CAM firmware (send frames, receive commands via WS)
+│   └── camera_pins.h          # Camera pinout for AI Thinker
+├── NodeMCU/
+│   └── NodeMCU.ino            # Environmental sensors & GPS, serial to ESP32-CAM
 ```
+
+**❌ Files with `*_http_old*` are obsolete and NOT used in the current version.**
 
 ---
 
-## 🌐 Requisiti
+## 🌐 Requirements
 
-### Backend Python
+### Backend
 - Python 3.x
 - Flask
+- websockets
 - OpenCV (`opencv-python`)
 - NumPy
+- pymongo + gridfs
+- bcrypt (for authentication)
 
-Installa con:
+Install dependencies:
 ```bash
-pip install flask opencv-python numpy
+pip install flask websockets opencv-python numpy pymongo gridfs bcrypt
 ```
 
-### Firmware ESP32-CAM
-- Scheda ESP32-CAM (es. AI Thinker)
+### Firmware
+- ESP32-CAM (AI Thinker)
 - Arduino IDE + ESP32 Board Manager
-- Librerie: `esp_camera`, `WiFi.h`, `HTTPClient.h`
+- Libraries: `esp_camera`, `WiFi.h`, `WebSocketsClient.h` (for WebSocket support), `HTTPClient.h` (optional for fallback)
+- NodeMCU for sensor bridge (TinyGPSPlus, DHT)
 
 ---
 
-## ▶️ Esecuzione
+## ▶️ Running the System
 
-### 1. Avvia il server Flask
-```bash
-python app.py
-```
-L'interfaccia sarà disponibile su `http://<IP>:5000`
+1. **Start the WebSocket/HTTP server:**
+   ```bash
+   cd WebApp
+   python app_ws.py
+   ```
+   Access the dashboard at: [http://localhost:5000](http://localhost:5000)
 
-### 2. Flash del firmware su ESP32-CAM
-- Inserisci le tue credenziali WiFi in `main.ino`
-- Carica il codice via Arduino IDE
-- Dopo il boot, l'ESP:
-  - invia immagini a `/upload`
-  - legge comandi da `/get_command`
+2. **Flash the ESP32-CAM firmware:**
+   - Use `main.ino` in `esp32_cam/`, set your WiFi credentials.
+   - Ensure WebSocket connection is enabled in the firmware.
 
----
+3. **(Optional) Flash NodeMCU:**
+   - Use `NodeMCU.ino` to bridge GPS/DHT11 data via UART to ESP32-CAM.
 
-## 🔄 API Server
-
-| Endpoint                     | Metodo | Descrizione                              |
-|-----------------------------|--------|------------------------------------------|
-| `/`                         | GET    | UI di controllo e visualizzazione video  |
-| `/upload`                   | POST   | Ricezione immagine da ESP32-CAM          |
-| `/video_feed`               | GET    | Stream MJPEG                             |
-| `/toggle_negative`          | POST   | Attiva/disattiva effetto negativo        |
-| `/toggle_object_detection`  | POST   | Attiva/disattiva YOLOv3                  |
-| `/control`                  | POST   | Invia comando di movimento (form)        |
-| `/get_command`              | GET    | Legge ultimo comando (per ESP)           |
+4. **Open the Web Dashboard:**
+   - Log in (default: `admin` / `admin123`)
+   - Control the car, view live video, and manage images.
 
 ---
 
-## 🔌 Pinout ESP32-CAM (AI Thinker)
+## ⚡ Key Features & Improvements
 
-### 📷 Fotocamera
-
-Incluso in `camera_pins.h`:
-```cpp
-#define PWDN_GPIO_NUM     32
-#define RESET_GPIO_NUM    -1
-#define XCLK_GPIO_NUM      0
-#define SIOD_GPIO_NUM     26
-#define SIOC_GPIO_NUM     27
-#define Y9_GPIO_NUM       35
-#define Y8_GPIO_NUM       34
-#define Y7_GPIO_NUM       39
-#define Y6_GPIO_NUM       36
-#define Y5_GPIO_NUM       21
-#define Y4_GPIO_NUM       19
-#define Y3_GPIO_NUM       18
-#define Y2_GPIO_NUM        5
-#define VSYNC_GPIO_NUM    25
-#define HREF_GPIO_NUM     23
-#define PCLK_GPIO_NUM     22
-```
-
-### 🛞 Motori
-
-```cpp
-#define ENA 14
-#define ENB 15
-#define IN1 13
-#define IN2 12
-#define IN3 3
-#define IN4 1
-```
+- **WebSocket-based streaming**: Ultra-low latency, robust against network glitches.
+- **Efficient video processing**: Object detection runs in background, skips frames for performance, and only notifies on important detections.
+- **GridFS image storage**: Scalable, no filename collisions, fast thumbnails, and metadata search.
+- **Modular expansion**: Easily add new sensors, control modes, or AI features.
+- **User authentication**: Secure login, credential update, and session management.
+- **Telegram integration**: Real-time alerts, customizable notification rules.
+- **Optimized for real-world use**: Non-blocking, robust error handling, performance logging.
 
 ---
 
-## 🧠 Funzioni di Movimento
+## 🔄 API Overview
 
-Nel firmware ESP32:
-- `avanti()`: marcia avanti
-- `indietro()`: retromarcia
-- `sterzaDestra()`: curva a destra
-- `sterzaSinistra()`: curva a sinistra
-
-Controllati tramite PWM con `ledcWrite`.
-
----
-
-## 📸 Loop del Firmware
-
-- Legge comando da Flask
-- Esegue la funzione di movimento
-- Cattura immagine dalla fotocamera
-- La invia via HTTP POST
+- **WebSocket**:
+  - Real-time video frame delivery
+  - Command/control messages
+  - Sensor and detection event updates
+- **HTTP REST (select endpoints):**
+  - `/api/images` — paginated saved images (metadata)
+  - `/saved_images/<filename>` — serve image from GridFS
+  - `/thumbnails/<filename>` — serve thumbnail
+  - `/api/images/<id>/classify` — run detection on saved image
+  - `/api/images/<id>/telegram` — send image via Telegram
 
 ---
 
-## 📌 Note Finali
+## 📌 Notes & Best Practices
 
-- Verifica che IP e porta tra ESP32-CAM e Flask corrispondano.
-- Consigliato l'uso di alimentazione esterna per ESP32-CAM + motori.
-- Puoi espandere il progetto con WebSocket, salvataggio immagini, riconoscimento avanzato ecc.
+- **Do not use or reference `*_http_old*` files**. The new system is faster, more robust, and fully WebSocket-based.
+- Make sure MongoDB is running (`localhost:27017` by default).
+- Use separate (external) power for motors and ESP32-CAM for stability.
+- Always change default admin credentials before deploying in production.
+- For best performance, run backend on a machine with sufficient CPU/RAM for OpenCV.
 
+---
 
+## 🚀 Motivation for Architectural Changes
+
+- **Why WebSocket?** HTTP polling caused high latency and server load. WebSocket enables real-time, bidirectional communication, improving video smoothness and command responsiveness.
+- **Why GridFS?** Filesystem storage had scaling and concurrency issues. GridFS allows safe concurrent access, easy metadata queries, and robust storage.
+- **Why modular backend?** To allow for future expansion (e.g., new ML models, sensor types, or notification channels) with minimal refactoring.
+
+---
+
+## 🛠️ Extending the System
+
+- Add new sensor modules: Update NodeMCU.ino and extend WebApp for new data fields.
+- Add new detection rules: Edit `object_detection.py` and `telegram_bot.py`.
+- Add user roles or multi-user support: Extend `auth.py` and user management UI.
+
+---
+
+## 📃 Credits & License
+
+Developed by [Crys266](https://github.com/Crys266) and collaborators.
+
+MIT License. See `LICENSE` for details.
