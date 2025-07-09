@@ -12,9 +12,8 @@ class AuthManager:
         self._ensure_admin_user()
 
     def _ensure_admin_user(self):
-        """Crea utente admin di default se non esiste"""
-        admin_user = self.users_collection.find_one({"username": "admin"})
-        if not admin_user:
+        """Crea utente admin di default SOLO se nessun utente esiste"""
+        if self.users_collection.count_documents({}) == 0:
             default_password = "admin123"  # Password di default che può essere cambiata
             password_hash = bcrypt.hashpw(default_password.encode('utf-8'), bcrypt.gensalt(rounds=12))
 
