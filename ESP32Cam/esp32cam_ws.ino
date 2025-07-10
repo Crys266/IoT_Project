@@ -4,10 +4,9 @@
 #include <ArduinoJson.h>
 #include <base64.h>
 #include <vector>
+#include <WiFiManager.h>
 
 // WiFi
-const char* ssid = "Yubu";
-const char* password = "Geova666";
 const char* flask_server = "10.189.14.187";
 const int websocket_port = 8765;  // PORTA WEBSOCKET NATIVA
 
@@ -175,16 +174,16 @@ void setupFlash() {
 }
 
 void setupWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, password);
-  WiFi.setSleep(false);
-  
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  // Usa WiFiManager per provisioning e recovery automatico
+  WiFiManager wifiManager;
+  // wifiManager.resetSettings(); // decommenta SOLO per test/reset forzato
+
+  // autoConnect: tenta connessione, al fallimento crea AP con captive portal
+  if (!wifiManager.autoConnect("ESP32_SETUP")) {
+    Serial.println("❌ Failed to connect and no config provided.");
+    ESP.restart(); // Riavvia per tentare di nuovo
   }
-  
-  Serial.printf("\n✅ WiFi connected: %s\n", WiFi.localIP().toString().c_str());
+  Serial.printf("✅ WiFi connected: %s\n", WiFi.localIP().toString().c_str());
   Serial.printf("📶 RSSI: %d dBm\n", WiFi.RSSI());
 }
 
@@ -266,7 +265,7 @@ void loop() {
   }
   
   if (wsConnected) {
-    //sendVideoFrame();
+    sendVideoFrame();
     sendHeartbeat();
   }
   
@@ -287,7 +286,7 @@ void loop() {
   delay(20);
 }
 
-/*
+
 void sendVideoFrame() {
   unsigned long now = millis();
   if (now - lastFrameTime < FRAME_INTERVAL) return;
@@ -326,7 +325,7 @@ void sendVideoFrame() {
   }
   esp_camera_fb_return(fb);
 }
-*/
+
 
 void sendHeartbeat() {
   static unsigned long lastHeartbeat = 0;
