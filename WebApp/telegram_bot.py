@@ -4,9 +4,11 @@ import time
 import json
 import os
 
+from database import create_surveillance_db
+db = create_surveillance_db()
+
 TELEGRAM_BOT_TOKEN = "7833394325:AAFvZ-WbKkrHvTHhZ4omg4jvSrJpA9DKKgo"
 CHAT_IDS_FILE = "chat_ids.json"
-DANGEROUS_OBJECTS = ['person']
 NOTIFICATION_COOLDOWN = 30  # seconds
 
 last_notification = {}
@@ -122,6 +124,7 @@ def notify_if_danger(detection_data, gps="unknown", image_path=None, caption=Non
     """
     ✅ SIGNATURE CORRETTA - mantiene compatibilità con il codice esistente
     """
+    DANGEROUS_OBJECTS = db.get_dangerous_classes()
     print(f"[BOT] notify_if_danger called with {len(detection_data)} detections, gps={gps}, image_path={image_path}")
 
     # Se è una chiamata manuale con caption (dalla galleria)
