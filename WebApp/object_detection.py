@@ -2,12 +2,30 @@ import cv2
 import numpy as np
 import os
 
-# Colori coerenti per le classi principali, fallback verde per tutte le altre
-LABEL_COLORS = {
-    'person': (0, 0, 255),    # RED
-    # puoi aggiungere altre classi
-}
-DEFAULT_BOX_COLOR = (0, 255, 0)  # GREEN
+from database import create_surveillance_db
+db = create_surveillance_db()
+
+def get_dangerous_classes():
+    """Restituisce la lista aggiornata delle classi considerate pericolose."""
+    return db.get_dangerous_classes()
+
+def get_label_colors():
+    # Rendi rosse le classi pericolose scelte dall’utente
+    dangerous = set(get_dangerous_classes())
+    colors = {}
+    for label in load_labels():
+        if label in dangerous:
+            colors[label] = (0, 0, 255)  # RED
+        else:
+            colors[label] = (0, 255, 0)  # GREEN
+    return colors
+
+def load_labels():
+    with open(os.path.join("static", "coco.names"), "r") as f:
+        return [line.strip() for line in f.readlines()]
+
+LABEL_COLORS = get_label_colors()
+DEFAULT_BOX_COLOR = (0, 255, 0)
 
 
 def load_yolo():
@@ -26,6 +44,9 @@ def detect_objects_with_boxes(img):
     """
     Detection ottimizzata che restituisce sia immagine annotata che dati box
     """
+    global LABEL_COLORS
+    LABEL_COLORS = get_label_colors()
+    
     net, classes, output_layers = load_yolo()
     height, width, channels = img.shape
 
