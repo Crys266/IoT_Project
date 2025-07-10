@@ -221,6 +221,17 @@ class SurveillanceDB:
         except Exception as e:
             print(f"❌ Error deleting from GridFS: {e}")
 
+    def get_dangerous_classes(self) -> list:
+        doc = self.db.system_config.find_one({'_id': 'notification_config'})
+        return doc.get('dangerous_classes', ['person']) if doc else ['person']
+
+    def set_dangerous_classes(self, dangerous_classes: list):
+        self.db.system_config.update_one(
+            {'_id': 'notification_config'},
+            {'$set': {'dangerous_classes': dangerous_classes}},
+            upsert=True
+        )
+
     def save_image_metadata(self, image_data: bytes, image_metadata: Dict[str, Any]) -> str:
         """
         Salva immagine completa (file + metadati) usando GridFS
@@ -600,6 +611,8 @@ class SurveillanceDB:
         except Exception as e:
             print(f"❌ Error getting database stats: {e}")
             return {}
+
+
 
 
 def create_surveillance_db(connection_string: str = None) -> SurveillanceDB:
