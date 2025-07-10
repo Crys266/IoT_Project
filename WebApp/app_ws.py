@@ -742,7 +742,6 @@ class IoTWebSocketServer:
         print("🔍 Object detection: OPTIMIZED with frame skipping and faster processing")
         print("📸 Image saving: GridFS storage")
         print("🤖 Telegram: Automatic notifications")
-        print("🚫 HTTP video fallback: REMOVED for better performance")
         print("📊 All IoT features: Integrated and optimized")
 
         loop.run_forever()
@@ -1187,6 +1186,25 @@ def send_image_via_telegram(image_id):
         print(f"❌ Error in send_image_via_telegram: {e}")
         return jsonify(error=str(e)), 500
 
+@app.route('/api/yolo_labels')
+@login_required
+def get_yolo_labels():
+    with open(os.path.join('static', 'coco.names')) as f:
+        labels = [line.strip() for line in f.readlines() if line.strip()]
+    return jsonify({'labels': labels})
+
+@app.route('/api/notification_classes', methods=['GET'])
+@login_required
+def get_notification_classes():
+    return jsonify({'dangerous_classes': db.get_dangerous_classes()})
+
+@app.route('/api/notification_classes', methods=['POST'])
+@login_required
+def set_notification_classes():
+    data = request.get_json()
+    dangerous_classes = data.get('dangerous_classes', [])
+    db.set_dangerous_classes(dangerous_classes)
+    return jsonify({'success': True, 'dangerous_classes': dangerous_classes})
 
 # ---- TELEGRAM API ----
 @app.route('/api/telegram/register', methods=['POST'])
