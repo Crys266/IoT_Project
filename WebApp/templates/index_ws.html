@@ -648,22 +648,93 @@
             }
         }
 
+        .video-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+            position: relative;
+        }
+        /* --- DEFAULT: desktop --- */
+        #info-banners { display: none; }
+        #gps-info-large, #temp-humi-info-large, #status-large { display: block; }
+
+        .video-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        #video-container { order: 1; }
+        #gps-info-large  { order: 2; margin-top: 18px; }
+        #temp-humi-info-large { order: 3; margin-top: 8px; }
+        #status-large    { order: 4; margin-top: 10px; }
+
+        /* --- MOBILE: mostra mini-banner sopra il video, nascondi quelli grandi --- */
         @media (max-width: 900px) {
             .dashboard-container {
-                grid-template-columns: 1fr;
-                gap: 20px;
-            }
-            .left-panel, .right-panel {
-                order: 2;
+                display: flex;
+                flex-direction: column;
+                gap: 14px;
+                max-width: 100vw;
+                margin: 0 auto;
+                padding: 0 4vw;
             }
             .video-section {
                 order: 1;
             }
-            #video-stream {
-                width: 100%;
-                max-width: 640px;
-                height: auto;
+            .right-panel {
+                order: 2;
             }
+            .left-panel {
+                order: 3;
+            }
+            #info-banners {
+                display: flex !important;
+                flex-direction: row;
+                gap: 4px;
+                margin-bottom: 7px;
+                justify-content: center;
+                order: -2;
+            }
+            .mini-card {
+                font-size: 11px;
+                padding: 3px 7px;
+                min-width: 44px;
+                max-width: 98vw;
+            }
+            #gps-info-large,
+            #temp-humi-info-large,
+            #status-large {
+                display: none !important;
+            }
+            .video-section {
+                flex-direction: column;
+                align-items: center;
+            }
+            #video-container { order: -1; }
+        }
+
+        /* Mini-card base style */
+        .info-banners {
+            width: 100%;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 0;
+        }
+        .mini-card {
+            background: #23262f;
+            border-radius: 7px;
+            padding: 5px 12px;
+            font-size: 13px;
+            color: #b9e6fe;
+            min-width: 70px;
+            max-width: 160px;
+            text-align: center;
+            box-shadow: 0 1px 3px #1117;
+            border: 1px solid #49a6ff33;
+            white-space: nowrap;
         }
     </style>
 </head>
@@ -685,6 +756,16 @@
                     <button id="detectionBtn" class="effect-btn" onclick="toggleObjectDetection()">
                         🔍 Object Detection
                     </button>
+                    <button id="showDangerousClassesBtn" class="effect-btn" type="button" style="width:100%;margin-bottom:12px;">
+                        ⚙️ Choose Alert Classes
+                    </button>
+                    <form id="dangerousClassesForm">
+                        <div id="yoloLabelsList" style="max-height: 200px; overflow-y: auto; text-align:left; font-size:15px;">
+                            <!-- dynamic checkboxes here -->
+                        </div>
+                        <button type="submit" class="effect-btn save-btn" style="margin-top:10px; width:100%;">💾 Save Alert Classes</button>
+                    </form>
+                    <div id="dangerousClassesStatus" style="font-size:12px; margin-top:6px;"></div>
                 </div>
             </div>
 
@@ -716,29 +797,30 @@
             </div>
         </div>
 
-        <!-- CENTER: Video Stream -->
         <div class="video-section">
+            <!-- MINI-BANNERS: visibili solo su mobile -->
+            <div id="info-banners" class="info-banners">
+                <div class="mini-card" id="gps-info-mini"></div>
+                <div class="mini-card" id="temp-humi-info-mini"></div>
+                <div class="mini-card" id="status-mini"></div>
+            </div>
+
+            <!-- VIDEO -->
             <div id="video-container">
                 <canvas id="video-stream" width="640" height="480"></canvas>
             </div>
 
-            <div class="card" style="margin-top: 20px; width: fit-content;">
-                <div id="gps-info">
-                    <img id="gps-icon" src="https://cdn-icons-png.flaticon.com/512/684/684908.png" alt="gps">
-                    <span>GPS non disponibile</span>
-                </div>
+            <!-- BANNERS GRANDI: visibili solo su desktop -->
+            <div class="card" id="gps-info-large">
+                <img id="gps-icon" src="https://cdn-icons-png.flaticon.com/512/684/684908.png" alt="gps">
+                <span id="gps-info-text">GPS non disponibile</span>
             </div>
-
-            <div class="card" style="margin-top: 20px; width: fit-content;">
-                <div id="temp-humi-info">
-                    🌡️ Temperatura: <b>-- °C</b> | 💧 Umidità: <b>-- %</b>
-                </div>
+            <div class="card" id="temp-humi-info-large">
+                <span id="temp-humi-info-text">🌡️ Temperatura: <b>-- °C</b> | 💧 Umidità: <b>-- %</b></span>
             </div>
-
-            <!-- STATUS CARD -->
-            <div class="status-card">
+            <div class="status-card" id="status-large">
                 <div class="status-header">📊 System Status</div>
-                <div id="status">Sistema pronto</div>
+                <div id="status-text">Sistema pronto</div>
             </div>
         </div>
 
@@ -912,8 +994,64 @@
         document.addEventListener('DOMContentLoaded', function() {
             setupEventListeners();
             connectWebSocket();
+            loadDangerousClassesUI();
+            // Nascondi il form di default
+            const form = document.getElementById('dangerousClassesForm');
+            form.style.display = "none";
+            // Mostra/nascondi al click
+            document.getElementById('showDangerousClassesBtn').onclick = function() {
+                form.style.display = (form.style.display === "none") ? "block" : "none";
+            };
             console.log('🚀 IoT Complete System initialized');
         });
+
+        async function loadDangerousClassesUI() {
+            // Fetch all labels
+            const labelsRes = await fetch('/api/yolo_labels');
+            const labelsData = await labelsRes.json();
+            const allLabels = labelsData.labels;
+            // Fetch selected dangerous classes
+            const selectedRes = await fetch('/api/notification_classes');
+            const selectedData = await selectedRes.json();
+            const selected = selectedData.dangerous_classes;
+            // Build checkboxes
+            const listDiv = document.getElementById('yoloLabelsList');
+            listDiv.innerHTML = '';
+            allLabels.forEach(label => {
+                const id = 'dangerous-' + label.replace(/\s/g, '_');
+                const checked = selected.includes(label) ? 'checked' : '';
+                listDiv.innerHTML += `
+                    <label style="display:block; margin-bottom:3px;">
+                        <input type="checkbox" name="dangerous_classes" value="${label}" ${checked}>
+                        ${label}
+                    </label>
+                `;
+            });
+            // Add submit handler
+            // Form handler
+            document.getElementById('dangerousClassesForm').onsubmit = async function (e) {
+                e.preventDefault();
+                const checkboxes = document.querySelectorAll('input[name="dangerous_classes"]:checked');
+                const selectedLabels = Array.from(checkboxes).map(cb => cb.value);
+
+                const resp = await fetch('/api/notification_classes', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({dangerous_classes: selectedLabels})
+                });
+                const data = await resp.json();
+                const msg = data.success ? "Saved!" : "Error saving";
+                const statusDiv = document.getElementById('dangerousClassesStatus');
+                statusDiv.innerText = msg;
+
+                // Nasconde il messaggio dopo 2.5 secondi
+                setTimeout(() => {
+                    // Mostra solo se il messaggio non è cambiato nel frattempo
+                    if (statusDiv.innerText === msg) statusDiv.innerText = "";
+                }, 2500);
+            };
+        }
+
 
         function setupEventListeners() {
             // Edit form
@@ -1137,29 +1275,44 @@
                 document.getElementById('detectionBtn').classList.add('active');
                 objectDetectionActive = true;
             }
-
             updateGPS(status.gps);
             updateEnvironmental(status.environmental);
         }
 
         function updateGPS(gpsData) {
-            const gpsDiv = document.getElementById('gps-info');
+            // Large (desktop)
+            const gpsText = document.getElementById('gps-info-text');
+            // Mini (mobile)
+            const gpsMini = document.getElementById('gps-info-mini');
             if (gpsData && gpsData.lat !== null && gpsData.lon !== null) {
-                gpsDiv.innerHTML = `<img id="gps-icon" src="https://cdn-icons-png.flaticon.com/512/684/684908.png" alt="gps">
-                <span>Lat: <b>${gpsData.lat.toFixed(6)}</b> | Lon: <b>${gpsData.lon.toFixed(6)}</b></span>`;
+                gpsText.innerHTML = `Lat: <b>${gpsData.lat.toFixed(6)}</b> | Lon: <b>${gpsData.lon.toFixed(6)}</b>`;
+                gpsMini.innerHTML = `📍 ${gpsData.lat.toFixed(5)}, ${gpsData.lon.toFixed(5)}`;
             } else {
-                gpsDiv.innerHTML = `<img id="gps-icon" src="https://cdn-icons-png.flaticon.com/512/684/684908.png" alt="gps">
-                <span style="color:#dc5f5f">GPS non disponibile</span>`;
+                gpsText.innerHTML = `<span style="color:#dc5f5f">GPS non disponibile</span>`;
+                gpsMini.innerHTML = `<span style="color:#dc5f5f">GPS N/D</span>`;
             }
         }
-
         function updateEnvironmental(envData) {
-            const envDiv = document.getElementById('temp-humi-info');
+            // Large (desktop)
+            const envText = document.getElementById('temp-humi-info-text');
+            // Mini (mobile)
+            const envMini = document.getElementById('temp-humi-info-mini');
             if (envData && envData.temperature !== null && envData.humidity !== null) {
-                envDiv.innerHTML = `🌡️ Temperatura: <b>${envData.temperature.toFixed(1)} °C</b> | 💧 Umidità: <b>${envData.humidity.toFixed(1)} %</b>`;
+                envText.innerHTML = `🌡️ Temperatura: <b>${envData.temperature.toFixed(1)} °C</b> | 💧 Umidità: <b>${envData.humidity.toFixed(1)} %</b>`;
+                envMini.innerHTML = `🌡️ ${envData.temperature.toFixed(1)}°C<br>💧 ${envData.humidity.toFixed(1)}%`;
             } else {
-                envDiv.innerHTML = `<span style="color:#dc5f5f">Dati temperatura/umidità non disponibili</span>`;
+                envText.innerHTML = `<span style="color:#dc5f5f">Dati temperatura/umidità non disponibili</span>`;
+                envMini.innerHTML = `<span style="color:#dc5f5f">Temp/Umid N/D</span>`;
             }
+        }
+        function updateStatus(msg, type='info') {
+            // Large
+            const statusLarge = document.getElementById('status-text');
+            // Mini
+            const statusMini = document.getElementById('status-mini');
+            statusLarge.innerText = msg;
+            statusMini.innerText = msg;
+            // Add color classes as needed
         }
 
         function sendCommand(direction) {
@@ -1197,7 +1350,6 @@
             ws.send(JSON.stringify({
                 type: 'save_image'
             }));
-
             showStatus('Saving current frame...', 'info');
         }
 
@@ -1446,23 +1598,29 @@
         function showStatus(msg, type='info') {
             const statusEl = document.getElementById('status');
             if (!statusEl) return;
-            // Remove all type classes
             statusEl.classList.remove('success', 'error', 'info', 'warning');
-            // Add new type class
             statusEl.classList.add(type);
             statusEl.innerText = msg;
             statusEl.style.opacity = 1;
-            // Auto-fade after 3 seconds for non-error messages
             if (type !== 'error') {
                 setTimeout(() => {
                     statusEl.style.opacity = 0.7;
                     setTimeout(() => {
-                        if (statusEl.innerText === msg) { // Only if message hasn't changed
+                        if (statusEl.innerText === msg) {
                             statusEl.innerText = 'Sistema pronto';
                             statusEl.classList.remove('success', 'error', 'info', 'warning');
                         }
                     }, 2000);
                 }, 3000);
+            }
+            // AGGIUNGI QUESTO per il mini-banner mobile
+            const statusMini = document.getElementById('status-mini');
+            if (statusMini) {
+                statusMini.innerText = msg;
+                statusMini.style.color =
+                    type === 'success' ? '#5fdc8c' :
+                    type === 'error' ? '#dc5f5f' :
+                    type === 'warning' ? '#ffc107' : '#b9e6fe';
             }
         }
 
