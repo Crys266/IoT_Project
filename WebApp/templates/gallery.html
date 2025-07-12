@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>📁 IoT Image Gallery</title>
+    <link rel="stylesheet" href="../static/styles/gallery.css">
+    <script src="../static/js/gallery.js" defer></script>
+</head>
+<body>
+    <button class="back-btn" onclick="window.close() || window.history.back()">⬅️ Back to Dashboard</button>
+
+    <div class="gallery-container">
+        <div class="header">
+            <h1>📁 IoT Image Gallery</h1>
+            <p>Captured images from the RC car surveillance system</p>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-number">{{ statistics.total_images }}</div>
+                <div class="stat-label">Total Images</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-number">{{ statistics.total_size_mb }} MB</div>
+                <div class="stat-label">Total Size</div>
+            </div>
+        </div>
+
+        <div class="image-grid">
+            {% for image in images %}
+            <div class="image-card">
+                <img src="/thumbnails/{{ image.thumbnail }}"
+                     class="image-thumbnail"
+                     onclick="viewFullImage('{{ image.filename }}')"
+                     alt="{{ image.filename }}">
+
+                <div class="image-info">
+                    <div class="image-title">📸 {{ image.filename }}</div>
+                    <div class="image-meta">
+                        📏 {{ (image.size/1024)|round(1) }} KB<br>
+                        📅 {{ image.created[:19].replace('T', ' ') }}<br>
+                        📍 {{ image.gps }}<br>
+                        {% if image.temperature %}🌡️ {{ image.temperature }}°C{% endif %}
+                        {% if image.humidity %}💧 {{ image.humidity }}%{% endif %}<br>
+                        {% if image.detection_results %}
+                        🔍 {{ image.detection_results.objects_count }} objects detected<br>
+                        {% endif %}
+                        {% if image.negative_effect %}🌗 Negative effect<br>{% endif %}
+                        {% if image.saved_by %}👤 Saved by {{ image.saved_by }}{% endif %}
+                    </div>
+                    <div class="image-actions">
+                        <button onclick="viewFullImage('{{ image.filename }}')" class="btn btn-view">👁️ View Full Size</button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if not images %}
+        <div style="text-align: center; padding: 50px; opacity: 0.7;">
+            <h2>📭 No Images Found</h2>
+            <p>No images have been captured yet. Go back to the dashboard and start capturing!</p>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Modal for full-size image viewing -->
+    <div id="imageModal" class="modal" onclick="closeModal()">
+        <button class="close-modal" onclick="closeModal()">×</button>
+        <div class="modal-content">
+            <img id="modalImage" class="modal-image" src="" alt="">
+        </div>
+    </div>
+
+    <script src="static/js/gallery.js"></script>
+</body>
+</html>

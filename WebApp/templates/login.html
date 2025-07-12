@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚗 RC Car Login</title>
+    <link rel="stylesheet" href="../static/styles/login.css">
+    <script src="../static/js/login.js" defer></script>
+</head>
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <h1>🚗 RC Car</h1>
+            <p>Sistema di Controllo</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="form-tabs">
+            <button class="tab-btn active" onclick="showTab('login')">Accedi</button>
+            <button class="tab-btn" onclick="showTab('change')">Cambia Credenziali</button>
+        </div>
+
+        <!-- Messaggi -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert {{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <!-- Form Login -->
+        <div id="login-form" class="form-container active">
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" id="username" name="username" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <input type="password" id="password" name="password" required>
+                </div>
+
+                <div class="remember-me">
+                    <input type="checkbox" id="remember" name="remember">
+                    <label for="remember">Ricordami</label>
+                </div>
+
+                <button type="submit" class="btn" name="action" value="login">
+                    🔐 Accedi
+                </button>
+            </form>
+
+            <div class="help-text">
+                <strong>Default:</strong> admin / admin123<br>
+                <small>Cambia la password dopo il primo accesso!</small>
+            </div>
+        </div>
+
+        <!-- Form Cambio Credenziali -->
+        <div id="change-form" class="form-container">
+            <form method="POST" action="/login">
+                <div class="form-group">
+                    <label for="current_username">Username Attuale</label>
+                    <input type="text" id="current_username" name="current_username" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="current_password">Password Attuale</label>
+                    <input type="password" id="current_password" name="current_password" required>
+                </div>
+
+                <div class="form-group">
+                    <label for="new_username">Nuovo Username (opzionale)</label>
+                    <input type="text" id="new_username" name="new_username" placeholder="Lascia vuoto per non cambiare">
+                </div>
+
+                <div class="form-group">
+                    <label for="new_password">Nuova Password (opzionale)</label>
+                    <input type="password" id="new_password" name="new_password" placeholder="Lascia vuoto per non cambiare">
+                </div>
+
+                <div class="form-group">
+                    <label for="confirm_password">Conferma Nuova Password</label>
+                    <input type="password" id="confirm_password" name="confirm_password" placeholder="Solo se cambi password">
+                </div>
+
+                <button type="submit" class="btn" name="action" value="change">
+                    ✏️ Aggiorna Credenziali
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/login.js"></script>
+</body>
+</html>

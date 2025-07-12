@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🚗 IoT RC Car Dashboard - Complete System</title>
+    <link rel="stylesheet" href="../static/styles/index_ws.css">
+    <script src="../static/js/index_ws.js"></script>
+</head>
+<body>
+    <div style="text-align:center; margin-bottom: 20px;">
+        <h1>🚗 ESP32-CAM RC Car Dashboard</h1>
+        <div style="color: #aaa;">Welcome, {{ username }} | <a href="/logout" style="color: #49a6ff;">Logout</a></div>
+    </div>
+
+    <div class="dashboard-container">
+        <!-- LEFT PANEL: Image & Detection Controls -->
+        <div class="left-panel">
+            <div class="card">
+                <div class="card-title">🎨 Video Effects</div>
+                <div class="button-grid">
+                    <button id="negativeBtn" class="effect-btn" onclick="toggleNegative()">
+                        🌗 Negative Effect
+                    </button>
+                    <button id="detectionBtn" class="effect-btn" onclick="toggleObjectDetection()">
+                        🔍 Object Detection
+                    </button>
+                    <button id="showDangerousClassesBtn" class="effect-btn" type="button" style="width:100%;margin-bottom:12px;">
+                        ⚙️ Choose Alert Classes
+                    </button>
+                    <form id="dangerousClassesForm">
+                        <div id="yoloLabelsList" style="max-height: 200px; overflow-y: auto; text-align:left; font-size:15px;">
+                            <!-- dynamic checkboxes here -->
+                        </div>
+                        <button type="submit" class="effect-btn save-btn" style="margin-top:10px; width:100%;">💾 Save Alert Classes</button>
+                    </form>
+                    <div id="dangerousClassesStatus" style="font-size:12px; margin-top:6px;"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">📸 Image Capture</div>
+                <div class="button-grid">
+                    <button class="effect-btn save-btn" onclick="saveCurrentFrame()">
+                        📸 Save Current Frame
+                    </button>
+                    <button class="effect-btn manage-btn" onclick="showSavedImages()">
+                        📁 Manage Gallery
+                    </button>
+                </div>
+                <div class="keyboard-hint">
+                    Press <strong>'C'</strong> for quick capture
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">🤖 Telegram Bot</div>
+                <div class="button-grid">
+                    <button class="effect-btn" onclick="setupTelegram()">
+                        📱 Setup Notifications
+                    </button>
+                    <button class="effect-btn" onclick="testTelegram()">
+                        🔔 Test Notification
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="video-section">
+            <!-- MINI-BANNERS: visibili solo su mobile -->
+            <div id="info-banners" class="info-banners">
+                <div class="mini-card" id="gps-info-mini"></div>
+                <div class="mini-card" id="temp-humi-info-mini"></div>
+                <div class="mini-card" id="status-mini"></div>
+            </div>
+
+            <!-- VIDEO -->
+            <div id="video-container">
+                <canvas id="video-stream" width="640" height="480"></canvas>
+            </div>
+
+            <!-- BANNERS GRANDI: visibili solo su desktop -->
+            <div class="card" id="gps-info-large">
+                <img id="gps-icon" src="https://cdn-icons-png.flaticon.com/512/684/684908.png" alt="gps">
+                <span id="gps-info-text">GPS non disponibile</span>
+            </div>
+            <div class="card" id="temp-humi-info-large">
+                <span id="temp-humi-info-text">🌡️ Temperatura: <b>-- °C</b> | 💧 Umidità: <b>-- %</b></span>
+            </div>
+            <div class="status-card" id="status-large">
+                <div class="status-header">📊 System Status</div>
+                <div id="status-text">Sistema pronto</div>
+            </div>
+        </div>
+
+        <!-- RIGHT PANEL: Movement & Flash Controls -->
+        <div class="right-panel">
+            <div class="card">
+                <div class="card-title">🎮 Movement Control</div>
+                <div class="dpad-controls">
+                    <div></div>
+                    <button id="btnAvanti" class="dpad-btn">▲</button>
+                    <div></div>
+                    <button id="btnSinistra" class="dpad-btn">◀</button>
+                    <button id="btnStop" class="dpad-btn dpad-center">■</button>
+                    <button id="btnDestra" class="dpad-btn">▶</button>
+                    <div></div>
+                    <button id="btnIndietro" class="dpad-btn">▼</button>
+                    <div></div>
+                </div>
+                <div class="keyboard-hint">
+                    Use <strong>arrow keys</strong> for movement
+                </div>
+                <div class="card-title">🚀 Velocità</div>
+                    <div class="speed-control">
+                        <input type="range" min="80" max="255" value="255" id="speedSlider" oninput="updateSpeed(this.value)">
+                        <span id="speedValue">255</span>
+                    </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">💡 Flash Control</div>
+                <div class="flash-controls">
+                    <button class="flash-btn flash-on" onclick="sendCommand('n')">
+                        💡 Flash ON
+                    </button>
+                    <button class="flash-btn flash-off" onclick="sendCommand('m')">
+                        💡 Flash OFF
+                    </button>
+                </div>
+            </div>
+
+            <!-- Telegram Info -->
+            <div id="telegram-info">
+                <h2>🔔 Notifiche Telegram</h2>
+                <p>
+                    Ricevi notifiche automatiche quando vengono rilevati oggetti pericolosi!<br>
+                    <b>1.</b> Cerca e avvia il bot su Telegram: <a href="https://t.me/IoTprovaCri3335652352_bot" target="_blank">@IoT Bot</a><br>
+                    <b>2.</b> Invia il comando <code>/start</code> per abilitare le notifiche.<br>
+                    <b>3.</b> Per disattivarle, invia <code>/stop</code> in qualsiasi momento.<br>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gallery Modal -->
+    <div id="savedImagesModal" class="modal">
+        <div class="modal-header">
+            <h2>📁 Image Gallery Management</h2>
+            <button onclick="hideSavedImages()" class="close-btn">❌ Close</button>
+        </div>
+
+        <div class="modal-body">
+            <!-- Statistics -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalImages">0</div>
+                    <div class="stat-label">Total Images</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="totalSize">0 MB</div>
+                    <div class="stat-label">Total Size</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="detectedImages">0</div>
+                    <div class="stat-label">With Detection</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="todayImages">0</div>
+                    <div class="stat-label">Today</div>
+                </div>
+            </div>
+
+            <!-- Images Grid -->
+            <div id="imageGrid" class="image-grid"></div>
+        </div>
+    </div>
+
+    <!-- Edit Image Modal -->
+    <div id="editModal" class="edit-modal">
+        <div class="edit-form">
+            <h3 style="color: #49a6ff; margin-bottom: 20px;">✏️ Edit Image</h3>
+            <form id="editImageForm">
+                <input type="hidden" id="editImageId" name="imageId">
+
+                <div class="form-group">
+                    <label for="editDescription">Description</label>
+                    <textarea id="editDescription" name="description" placeholder="Add description..."></textarea>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editTags">Tags (comma separated)</label>
+                        <input type="text" id="editTags" name="tags" placeholder="tag1, tag2, tag3">
+                    </div>
+                    <div class="form-group">
+                        <label for="editCategory">Category</label>
+                        <select id="editCategory" name="category">
+                            <option value="">Select category...</option>
+                            <option value="surveillance">Surveillance</option>
+                            <option value="patrol">Patrol</option>
+                            <option value="detection">Object Detection</option>
+                            <option value="test">Test</option>
+                            <option value="emergency">Emergency</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editGpsLat">GPS Latitude</label>
+                        <input type="number" id="editGpsLat" name="gpsLat" step="0.000001" placeholder="0.000000">
+                    </div>
+                    <div class="form-group">
+                        <label for="editGpsLon">GPS Longitude</label>
+                        <input type="number" id="editGpsLon" name="gpsLon" step="0.000001" placeholder="0.000000">
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editTemp">Temperature (°C)</label>
+                        <input type="number" id="editTemp" name="temperature" step="0.1" placeholder="0.0">
+                    </div>
+                    <div class="form-group">
+                        <label for="editHumidity">Humidity (%)</label>
+                        <input type="number" id="editHumidity" name="humidity" step="0.1" placeholder="0.0">
+                    </div>
+                </div>
+
+                <div style="display: flex; gap: 10px; margin-top: 20px;">
+                    <button type="submit" class="login-btn" style="flex: 1;">💾 Save Changes</button>
+                    <button type="button" onclick="closeEditModal()" class="close-btn" style="flex: 1;">❌ Cancel</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/static/js/index_ws.js"></script>
+</body>
+</html>
