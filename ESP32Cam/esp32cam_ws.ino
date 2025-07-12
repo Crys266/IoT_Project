@@ -174,18 +174,17 @@ void setupFlash() {
 }
 
 void setupWiFi() {
-  // Usa WiFiManager per provisioning e recovery automatico
   WiFiManager wifiManager;
-  // wifiManager.resetSettings(); // decommenta SOLO per test/reset forzato
-
-  // autoConnect: tenta connessione, al fallimento crea AP con captive portal
+  wifiManager.setConfigPortalTimeout(120); // Timeout di 2 minuti
   if (!wifiManager.autoConnect("ESP32_SETUP")) {
-    Serial.println("❌ Failed to connect and no config provided.");
-    ESP.restart(); // Riavvia per tentare di nuovo
+    Serial.println("❌ WiFiManager failed, restarting after AP timeout...");
+    delay(500);
+    ESP.restart();
   }
   Serial.printf("✅ WiFi connected: %s\n", WiFi.localIP().toString().c_str());
   Serial.printf("📶 RSSI: %d dBm\n", WiFi.RSSI());
 }
+
 
 void setupCamera() {
   camera_config_t config;
@@ -258,6 +257,12 @@ void setupWebSocket() {
 void loop() {
   webSocket.loop();
   
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("⚠️ WiFi lost!");
+    delay(1000);
+    return;
+  }
+
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("⚠️ WiFi lost!");
     delay(1000);
