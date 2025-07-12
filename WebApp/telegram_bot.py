@@ -170,10 +170,37 @@ def notify_if_danger(detection_data, gps="unknown", image_path=None, caption=Non
             print(f"[BOT] Ignored: {label} (conf: {conf})")
 
 
-# Utility for manual test
-def test_bot():
-    send_to_all_chats("🔔 Test messaggio manuale dal bot!", image_path=None)
-
-
-if __name__ == "__main__":
-    test_bot()
+def telegram_longpoll_bot():
+    """
+    Polling long per rispondere a /start e /stop.
+    """
+    print("[BOT] Telegram polling bot started")
+    last_update_id = 0
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/getUpdates"
+            params = {"timeout": 60, "offset": last_update_id + 1}
+            r = requests.get(url, params=params, timeout=70)
+            data = r.json()
+            if not data.get("ok"):
+                time.sleep(2)
+                continue
+            for update in data.get("result", []):
+                last_update_id = update["update_id"]
+                if "message" not in update:
+                    continue
+                msg = update["message"]
+                chat_id = msg["chat"]["id"]
+                text = msg.get("text", "")
+                if text == "/start":
+                    register_chat_id(chat_id)
+                    send_telegram_message(
+                        "👋 Benvenuto! Riceverai notifiche automatiche sugli eventi del sistema IoT. "
+                        "Per smettere, invia /stop.", chat_id)
+                elif text == "/stop":
+                    unregister_chat_id(chat_id)
+                    send_telegram_message(
+                        "👋 Notifiche disattivate. Puoi riattivarle in qualsiasi momento con /start.", chat_id)
+        except Exception as e:
+            print(f"[BOT] Polling error: {e}")
+            time.sleep(5)
