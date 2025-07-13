@@ -1,0 +1,23 @@
+# Usa l'immagine base Python 3.10
+FROM python:3.11
+
+# Setta la cartella di lavoro all'interno del container per la tua app
+WORKDIR /usr/src/app
+
+# Installa le librerie di sistema necessarie per OpenCV
+RUN apt-get update && apt-get install -y libgl1-mesa-glx
+
+# Copia il file delle dipendenze (requirements.txt) dalla cartella WebApp
+COPY requirements.txt ./
+
+# Installa le dipendenze Python da requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copia tutto il codice dell'app nel container
+COPY . .
+
+# Espone la porta 5000 per la WebApp
+EXPOSE 5000
+
+# Comando per avviare Flask (modifica "app_ws.py" se il tuo file principale si chiama diversamente)
+CMD ["python3", "app.py"]

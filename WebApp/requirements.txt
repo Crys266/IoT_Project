@@ -1,0 +1,12 @@
+flask
+opencv-python
+numpy
+requests
+websockets==12.0
+pymongo
+bcrypt
+python-dotenv
+pillow
+gunicorn
+jinja2
+werkzeug
