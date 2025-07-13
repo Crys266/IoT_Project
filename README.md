@@ -115,5 +115,3 @@ NodeMCU firmware (optional):
   - `/api/notification_classes` — get/set alert classes
 
 ---
-
-**End of README.**
