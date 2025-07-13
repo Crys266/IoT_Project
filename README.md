@@ -32,44 +32,49 @@ All communication is via WebSocket. Images and metadata are saved in MongoDB/Gri
 
 ```
 IoT_Project/
+├── docker-compose.yml          # Docker Compose file
 ├── WebApp/
-│   ├── app.py                 # Main backend (Flask + WebSocket + REST API)
-│   ├── object_detection.py    # YOLOv3 detection logic (OpenCV)
-│   ├── database.py            # MongoDB/GridFS storage logic
-│   ├── telegram_bot.py        # Telegram bot notification system
-│   ├── auth.py                # User authentication
+│   ├── Dockerfile              # Dockerfile for backend
+│   ├── requirements.txt        # Python dependencies
+│   ├── app.py                  # Main backend (Flask + WebSocket + REST API)
+│   ├── object_detection.py     # YOLOv3 detection logic (OpenCV)
+│   ├── database.py             # MongoDB/GridFS storage logic
+│   ├── telegram_bot.py         # Telegram bot notification system
+│   ├── auth.py                 # User authentication
 │   ├── static/
-│   │   ├── yolov3.weights     # YOLO weights
-│   │   ├── yolov3.cfg         # YOLO config
-│   │   ├── coco.names         # Class labels
-│   │   └── styles/ js/        # Dashboard CSS/JS
+│   │   ├── yolov3.weights      # YOLO weights (see requirements below)
+│   │   ├── yolov3.cfg          # YOLO config
+│   │   ├── coco.names          # Class labels
+│   │   └── styles/ js/         # Dashboard CSS/JS
 │   └── templates/
-│       ├── index_ws.html      # Main dashboard
-│       ├── gallery.html       # Image gallery
-│       └── login.html         # Login UI
+│       ├── index_ws.html       # Main dashboard
+│       ├── gallery.html        # Image gallery
+│       └── login.html          # Login UI
 ├── ESP32Cam/
-│   └── esp32cam_ws.ino        # ESP32-CAM firmware (WebSocket)
+│   └── esp32cam_ws.ino         # ESP32-CAM firmware (WebSocket)
 ├── NodeMCU/
-│   └── NodeMCU.ino            # (optional) GPS and sensors firmware
+│   └── NodeMCU.ino             # (optional) GPS and sensors firmware
 ```
 
 ---
 
 ## Requirements
 
-Backend:
-- Python 3.x
-- Flask
-- websockets
-- opencv-python
-- numpy
-- pymongo, gridfs
-- bcrypt
+Python 3.x
 
-Install:
+Backend dependencies:
+You can install all backend python dependencies from the `WebApp/requirements.txt` file:
 ```bash
-pip install flask websockets opencv-python numpy pymongo gridfs bcrypt
+pip install -r WebApp/requirements.txt
 ```
+
+YOLOv3 weights file: 
+You must manually download the YOLOv3 weights file, as it is too large to be stored on GitHub.  
+Download it with:  
+```bash
+wget https://data.pjreddie.com/files/yolov3.weights -P WebApp/static/
+```
+This file is required for object detection to work correctly and must be placed in the `WebApp/static/` directory.
 
 ESP32-CAM firmware:
 - Arduino IDE + ESP32 board packages
@@ -80,9 +85,33 @@ NodeMCU firmware (optional):
 
 ---
 
+## Docker Support
+
+### Why Docker?
+
+Docker allows you to package the backend and all its dependencies into containers, making setup easier and ensuring the application runs the same way everywhere. With Docker Compose, you can launch both the Flask backend and a MongoDB instance with a single command, without having to manually install Python libraries or MongoDB locally.
+
+### Running with Docker Compose
+
+Make sure you have [Docker](https://docs.docker.com/get-docker/) and [Docker Compose](https://docs.docker.com/compose/install/) installed.
+
+1. From the project root directory, build and start the services:
+   ```bash
+   docker compose up -d --build
+   ```
+
+   This will build the Flask backend (using `WebApp/Dockerfile` and `WebApp/requirements.txt`) and start both the backend and MongoDB containers in the background.
+
+2. To stop and remove the containers, run:
+   ```bash
+   docker compose down
+   ```
+
+---
+
 ## Setup & Usage
 
-1. Start MongoDB (default: `localhost:27017`)
+1. **(If not using Docker)** Start MongoDB (default: `localhost:27017`)
 2. Start the backend server:
    ```bash
    cd WebApp
