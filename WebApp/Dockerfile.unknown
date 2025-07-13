@@ -1,4 +1,4 @@
-# Usa l'immagine base Python 3.10
+# Usa l'immagine base Python 3.11
 FROM python:3.11
 
 # Setta la cartella di lavoro all'interno del container per la tua app
