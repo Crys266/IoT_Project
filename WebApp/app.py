@@ -13,7 +13,8 @@ import tempfile
 
 # Import delle funzionalità esistenti
 from object_detection import detect_objects_with_boxes
-from telegram_bot import notify_if_danger, register_chat_id, unregister_chat_id, send_telegram_message
+from telegram_bot import notify_if_danger, register_chat_id, unregister_chat_id, send_telegram_message, \
+    send_to_all_chats, telegram_longpoll_bot
 from database import create_surveillance_db
 from auth import AuthManager, generate_secret_key, login_required
 
@@ -24,6 +25,9 @@ try:
 except Exception as e:
     print(f"❌ FATAL: Failed to initialize MongoDB: {e}")
     exit(1)
+
+threading.Thread(target=telegram_longpoll_bot, daemon=True).start()
+print("🤖 Telegram polling bot started in background.")
 
 # Auth Manager
 auth_manager = AuthManager(db)
@@ -51,7 +55,7 @@ latest_detection = None
 detection_lock = threading.Lock()
 detection_count = 0
 MAX_DETECTION_AGE = 0.8  # RIDOTTO da 1.5s a 0.8s per più fluidità
-red_classes_config = ['person']
+red_classes_config = db.get_dangerous_classes()
 
 # OTTIMIZZAZIONE: Detection più veloce
 DETECTION_SKIP_FRAMES = 3  # Processa 1 frame ogni 3 per performance
@@ -459,6 +463,8 @@ class IoTWebSocketServer:
 
     def draw_detection_boxes_on_live_frame(self, live_img, boxes_data):
         """Disegna box di detection sull'immagine - OTTIMIZZATO"""
+        global red_classes_config
+        red_classes_config = db.get_dangerous_classes()
         overlay_img = live_img.copy()
         for box in boxes_data:
             x, y, w, h = box['x'], box['y'], box['w'], box['h']
@@ -830,7 +836,7 @@ server = IoTWebSocketServer(host='0.0.0.0', websocket_port=8765, http_port=5000)
 @app.route('/')
 @login_required
 def index():
-    return render_template('index_ws.html', websocket_port=server.websocket_port, username=session.get('username'))
+    return render_template('index.html', websocket_port=server.websocket_port, username=session.get('username'))
 
 
 @app.route('/gallery')
@@ -1204,6 +1210,8 @@ def set_notification_classes():
     data = request.get_json()
     dangerous_classes = data.get('dangerous_classes', [])
     db.set_dangerous_classes(dangerous_classes)
+    global red_classes_config
+    red_classes_config = db.get_dangerous_classes()
     return jsonify({'success': True, 'dangerous_classes': dangerous_classes})
 
 # ---- TELEGRAM API ----
@@ -1219,8 +1227,7 @@ def telegram_register():
 @app.route('/api/telegram/test', methods=['POST'])
 @login_required
 def telegram_test():
-    # Esempio: invia notifica di test solo all'utente
-    send_telegram_message("Test notification from IoT system!", chat_id=session.get('telegram_chat_id'))
+    send_to_all_chats("Test notification from IoT system (test API)!")
     return jsonify({'success': True})
 
 
