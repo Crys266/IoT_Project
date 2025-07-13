@@ -11,7 +11,7 @@ from typing import List, Dict, Optional, Any
 
 
 class SurveillanceDB:
-    def __init__(self, connection_string: str = "mongodb://localhost:27017/"):
+    def __init__(self, connection_string: str = "mongodb://db:27017/"):
         """
         Inizializza connessione MongoDB per sistema surveillance IoT con GridFS
         """
@@ -618,5 +618,5 @@ class SurveillanceDB:
 def create_surveillance_db(connection_string: str = None) -> SurveillanceDB:
     """Crea istanza database con GridFS"""
     if connection_string is None:
-        connection_string = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
+        connection_string = os.getenv("MONGODB_URI", "mongodb://db:27017/")
     return SurveillanceDB(connection_string)
