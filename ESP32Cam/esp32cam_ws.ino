@@ -3,7 +3,6 @@
 #include <WebSocketsClient.h>
 #include <ArduinoJson.h>
 #include <base64.h>
-#include <vector>
 #include <WiFiManager.h>
 
 // WiFi
@@ -17,16 +16,17 @@ unsigned long framesSent = 0;
 unsigned long lastFrameTime = 0;
 const unsigned long FRAME_INTERVAL = 100; // 10 FPS
 
-// Motor pins (completo)
+// Motor pins 
 struct MOTOR_PINS {
   int pinEn;
   int pinIN1;
   int pinIN2;
 };
 
-std::vector<MOTOR_PINS> motorPins = {
-  {12, 13, 15},  // RIGHT_MOTOR
-  {12, 14, 2},   // LEFT_MOTOR
+#define NUM_MOTORS 2
+MOTOR_PINS motorPins[NUM_MOTORS] = {
+  {12, 13, 15},
+  {12, 14, 2}
 };
 
 #define FLASH_LED_PIN 4
@@ -64,18 +64,21 @@ const unsigned long COMMAND_TIMEOUT = 250; // ms
 #define HREF_GPIO_NUM     23
 #define PCLK_GPIO_NUM     22
 
+#define NODEMCU_RX 3  // U0RXD (ESP32-CAM RX) -- collegato a TX NodeMCU
+#define NODEMCU_TX 1  // U0TXD (ESP32-CAM TX) -- collegato a RX NodeMCU
+
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch(type) {
     case WStype_DISCONNECTED:
       {
         wsConnected = false;
-        Serial.println("❌ [WS] Disconnected from native server");
+        Serial.println("[WS] Disconnected");
         break;
       }      
     case WStype_CONNECTED:
       {
         wsConnected = true;
-        Serial.printf("✅ [WS] Connected to native server: %s\n", payload);        
+        Serial.printf("[WS] Connected to: %s\n", payload);        
         // Invia identificazione ESP32 per server nativo
         DynamicJsonDocument doc(300);
         doc["type"] = "esp32_hello";
@@ -87,51 +90,41 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
         String jsonString;
         serializeJson(doc, jsonString);
         webSocket.sendTXT(jsonString);        
-        Serial.println("📤 ESP32 hello sent to native server");
         break;
       }
-      
     case WStype_TEXT:
       {
-        Serial.printf("📥 [WS] Received: %s\n", payload);
+        Serial.printf("[WS] Received: %s\n", payload);
         DynamicJsonDocument doc(300);
         DeserializationError error = deserializeJson(doc, payload);
         if (error == DeserializationError::Ok) {
           String msgType = doc["type"].as<String>();
-          if (msgType == "esp32_hello_ack") {
-            Serial.println("✅ ESP32 identification confirmed by server");
-          }
-          else if (msgType == "control_command") {
+          if (msgType == "control_command") {
             String cmd = doc["command"].as<String>();
-            Serial.printf("🎮 Command from server: %s\n", cmd.c_str());
+            Serial.printf("Command: %s\n", cmd.c_str());
             // Gestione comando velocità
             if(cmd.startsWith("speed:")) {
               int spd = cmd.substring(6).toInt();
               if(spd >= 0 && spd <= 255) {
                 setMotorSpeed(spd);
-                Serial.printf("⚡️ Speed set to %d\n", spd);
+                Serial.printf("Speed: %d\n", spd);
               }
             } else {
               executeCommand(cmd);
             }
           }
-          else if (msgType == "heartbeat_ack") {
-            Serial.println("💗 Heartbeat acknowledged");
-          }
         }
         break;
       }
-      
     case WStype_ERROR:
       {
-        Serial.printf("❌ [WS] Error: %s\n", payload);
+        Serial.printf("[WS] Error: %s\n", payload);
         wsConnected = false;
         break;
       }
-      
     default:
       {
-        Serial.printf("🔍 [WS] Event type: %u\n", type);
+        Serial.printf("[WS] Event type: %u\n", type);
         break;
       }
   }
@@ -139,50 +132,38 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
 void setup() {
   Serial.begin(115200);
-  delay(2000);
-  
-  Serial.println("=== ESP32-CAM NATIVE WEBSOCKET v4.0 ===");
-  
   setupMotors();
   setupFlash();
   setupWiFi();
   setupCamera();
+  Serial2.begin(9600, SERIAL_8N1, NODEMCU_RX, NODEMCU_TX); 
   setupWebSocket();
-  
-  Serial.println("=== SYSTEM READY - NATIVE WEBSOCKET ===");
+  Serial.println("SYSTEM READY - WEBSOCKET");
 }
 
 void setupMotors() {
-  for (int i = 0; i < motorPins.size(); i++) {
+  for (int i = 0; i < NUM_MOTORS; i++) {
     pinMode(motorPins[i].pinIN1, OUTPUT);
     pinMode(motorPins[i].pinIN2, OUTPUT);
     digitalWrite(motorPins[i].pinIN1, LOW);
     digitalWrite(motorPins[i].pinIN2, LOW);
-    
     ledcAttach(motorPins[i].pinEn, PWMFreq, PWMResolution);
     ledcWrite(motorPins[i].pinEn, 0);
   }
-  
   motorsActive = false;
-  Serial.println("✅ Motors initialized");
 }
 
 void setupFlash() {
   pinMode(FLASH_LED_PIN, OUTPUT);
   digitalWrite(FLASH_LED_PIN, LOW);
-  Serial.println("✅ Flash initialized");
 }
 
 void setupWiFi() {
   WiFiManager wifiManager;
-  wifiManager.setConfigPortalTimeout(120); // Timeout di 2 minuti
   if (!wifiManager.autoConnect("ESP32_SETUP")) {
-    Serial.println("❌ WiFiManager failed, restarting after AP timeout...");
-    delay(500);
-    ESP.restart();
+    Serial.println("WiFiManager failed, AP...");;
   }
-  Serial.printf("✅ WiFi connected: %s\n", WiFi.localIP().toString().c_str());
-  Serial.printf("📶 RSSI: %d dBm\n", WiFi.RSSI());
+  Serial.printf("WiFi connected: %s\n", WiFi.localIP().toString().c_str());
 }
 
 
@@ -212,25 +193,21 @@ void setupCamera() {
   // Configurazione ottimale per WebSocket nativo
   if(psramFound()) {
     config.frame_size = FRAMESIZE_VGA;     // 640x480
-    config.jpeg_quality = 10;              // Qualità alta
+    config.jpeg_quality = 10;            
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_PSRAM;
     config.grab_mode = CAMERA_GRAB_LATEST;
-    Serial.println("📦 PSRAM: VGA 640x480, Quality 10");
   } else {
     config.frame_size = FRAMESIZE_HVGA;    // 480x320
-    config.jpeg_quality = 12;              // Qualità buona
+    config.jpeg_quality = 12;             
     config.fb_count = 1;
     config.fb_location = CAMERA_FB_IN_DRAM;
     config.grab_mode = CAMERA_GRAB_LATEST;
-    Serial.println("⚠️ No PSRAM: HVGA 480x320, Quality 12");
   }
-
   if (esp_camera_init(&config) != ESP_OK) {
-    Serial.println("❌ Camera init failed");
+    Serial.println("Camera fail");
     return;
   }
-
   sensor_t * s = esp_camera_sensor_get();
   if (s != nullptr) {
     s->set_vflip(s, 1);
@@ -238,91 +215,100 @@ void setupCamera() {
     s->set_brightness(s, 1);
     s->set_contrast(s, 2);
   }
-
-  Serial.println("✅ Camera configured for native WebSocket");
 }
 
 void setupWebSocket() {
-  Serial.println("🌐 Setting up native WebSocket...");
-  
-  // Connessione WebSocket nativa - porta 8765
+  Serial.println("Set WebSocket...");
   webSocket.begin(flask_server, websocket_port, "/");
   webSocket.onEvent(webSocketEvent);
   webSocket.setReconnectInterval(5000);
-  
-  Serial.printf("📡 Native WebSocket: ws://%s:%d/\n", flask_server, websocket_port);
-  Serial.printf("⏱️ Frame interval: %d ms (%.1f FPS)\n", FRAME_INTERVAL, 1000.0/FRAME_INTERVAL);
+  Serial.printf("WebSocket: ws://%s:%d/\n", flask_server, websocket_port);
 }
 
 void loop() {
   webSocket.loop();
-  
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("⚠️ WiFi lost!");
+    Serial.println("WiFi lost!");
     delay(1000);
     return;
   }
-
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("⚠️ WiFi lost!");
-    delay(1000);
-    return;
-  }
-  
   if (wsConnected) {
     sendVideoFrame();
     sendHeartbeat();
   }
-  
-  // TIMEOUT: ferma tutto se non arrivano comandi da troppo tempo
+  static unsigned long lastSensorRead = 0;
+  if (millis() - lastSensorRead > 2000) {
+    lastSensorRead = millis();
+    readAndSendSensorData();
+  }
   if (motorsActive && (millis() - lastCommandTime > COMMAND_TIMEOUT)) {
     stopMotors();
-    Serial.println("⏰ STOPPED for command timeout (safety)");
   }
-
   static unsigned long lastStatus = 0;
   if (millis() - lastStatus > 15000) {
-    Serial.printf("📊 Status: WS=%s | Frames=%d | Heap=%d\n",
+    Serial.printf("Status: WS=%s | Frames=%d | Heap=%d\n",
                   wsConnected ? "Connected" : "Disconnected",
                   framesSent, ESP.getFreeHeap());
     lastStatus = millis();
   }
-  
   delay(20);
 }
 
+void readAndSendSensorData() {
+  static char line[64];
+  static byte pos = 0;
+  while (Serial2.available()) {
+    char c = Serial2.read();
+    if (c == '\n' || c == '\r') {
+      line[pos] = 0;
+      // Parsing compatto: cerca le virgole e usa atof()
+      float vals[4] = {0, 0, 0, 0};
+      int idx = 0;
+      char* token = strtok(line, ",");
+      while (token && idx < 4) {
+        vals[idx++] = atof(token);
+        token = strtok(NULL, ",");
+      }
+      if (idx == 4) {
+        StaticJsonDocument<128> doc;
+        doc["type"] = "sensor_data";
+        doc["gps"]["lat"] = vals[0];
+        doc["gps"]["lon"] = vals[1];
+        doc["environmental"]["temperature"] = vals[2];
+        doc["environmental"]["humidity"] = vals[3];
+        String payload;
+        serializeJson(doc, payload);
+        webSocket.sendTXT(payload);
+      }
+      pos = 0;
+      line[0] = 0;
+    } else if (pos < sizeof(line) - 1) {
+      line[pos++] = c;
+    }
+  }
+}
 
 void sendVideoFrame() {
   unsigned long now = millis();
   if (now - lastFrameTime < FRAME_INTERVAL) return;
-
   camera_fb_t * fb = esp_camera_fb_get();
-  if (!fb) {
-    Serial.println("❌ esp_camera_fb_get() failed");
-    return;
-  }
-  Serial.printf("📸 Got frame of %d bytes\n", fb->len);
-
+  if (!fb) return;
   if (fb->len > 0 && fb->len < 120000) { // Max 120KB
     String encodedFrame = base64::encode(fb->buf, fb->len);
-
     if (encodedFrame.length() < 180000) { // Max 180KB JSON
       DynamicJsonDocument doc(encodedFrame.length() + 300);
       doc["frame"] = encodedFrame;
       doc["size"] = fb->len;
       doc["num"] = framesSent;
       doc["timestamp"] = now;
-
       String jsonString;
       serializeJson(doc, jsonString);
-
       bool success = webSocket.sendTXT(jsonString);
-
       if (success) {
         framesSent++;
         lastFrameTime = now;
         if (framesSent % 50 == 0) {
-          Serial.printf("📤 Frame #%d: %d bytes -> %d chars JSON\n",
+          Serial.printf("Frame #%d: %d bytes -> %d chars JSON\n",
                         framesSent, fb->len, jsonString.length());
         }
       }
@@ -335,7 +321,6 @@ void sendVideoFrame() {
 void sendHeartbeat() {
   static unsigned long lastHeartbeat = 0;
   unsigned long now = millis();
-  
   if (now - lastHeartbeat > 20000) { // Ogni 20 secondi
     DynamicJsonDocument doc(200);
     doc["type"] = "heartbeat";
@@ -343,32 +328,29 @@ void sendHeartbeat() {
     doc["frames_sent"] = framesSent;
     doc["free_heap"] = ESP.getFreeHeap();
     doc["wifi_rssi"] = WiFi.RSSI();
-    
     String jsonString;
     serializeJson(doc, jsonString);
     webSocket.sendTXT(jsonString);
-    
     lastHeartbeat = now;
   }
 }
 
 void executeCommand(String cmd) {
   lastCommandTime = millis(); 
-   // Parsing per comando con velocità
   if (cmd.startsWith("speed:")) {
     int spd = cmd.substring(6).toInt();
     if (spd >= 80 && spd <= 255) {
       setMotorSpeed(spd);
-      Serial.printf("⚡️ Speed set to %d\n", spd);
+      Serial.printf("Speed: %d\n", spd);
     }
   }
   else if (cmd == "n") {
     digitalWrite(FLASH_LED_PIN, HIGH);
-    Serial.println("💡 Flash ON");
+    Serial.println("Flash ON");
   } 
   else if (cmd == "m") {
     digitalWrite(FLASH_LED_PIN, LOW);
-    Serial.println("💡 Flash OFF");
+    Serial.println("Flash OFF");
   }
   else if (cmd == "avanti" || cmd == "a") {
     moveForward();
@@ -404,7 +386,7 @@ void rotateMotor(int motorNumber, int motorDirection) {
 
 void setMotorSpeed(int speed) {
   globalSpeed = speed;
-  for (int i = 0; i < motorPins.size(); i++) {
+  for (int i = 0; i < NUM_MOTORS; i++) {
     ledcWrite(motorPins[i].pinEn, speed);
   }
 }
@@ -414,7 +396,7 @@ void moveForward() {
   rotateMotor(LEFT_MOTOR, FORWARD);
   setMotorSpeed(globalSpeed);
   motorsActive = true;
-  Serial.println("🚗 Moving FORWARD");
+  Serial.println("FORWARD");
 }
 
 void moveBackward() {
@@ -422,7 +404,7 @@ void moveBackward() {
   rotateMotor(LEFT_MOTOR, BACKWARD);
   setMotorSpeed(globalSpeed);
   motorsActive = true;
-  Serial.println("🚗 Moving BACKWARD");
+  Serial.println("BACKWARD");
 }
 
 void turnLeft() {
@@ -430,7 +412,7 @@ void turnLeft() {
   rotateMotor(LEFT_MOTOR, BACKWARD);
   setMotorSpeed(globalSpeed);
   motorsActive = true;
-  Serial.println("🚗 Turning LEFT");
+  Serial.println("LEFT");
 }
 
 void turnRight() {
@@ -438,12 +420,12 @@ void turnRight() {
   rotateMotor(LEFT_MOTOR, FORWARD);
   setMotorSpeed(globalSpeed);
   motorsActive = true;
-  Serial.println("🚗 Turning RIGHT");
+  Serial.println("RIGHT");
 }
 
 void stopMotors() {
   rotateMotor(RIGHT_MOTOR, STOP);
   rotateMotor(LEFT_MOTOR, STOP);
   motorsActive = false;
-  Serial.println("🚗 STOPPED");
+  Serial.println("STOPPED");
 }
